@@ -46,7 +46,7 @@ services:
     ports:
       - "80:80"
     volumes:
-      - ./Caddyfile.ci:/etc/caddy/Caddyfile:ro
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
     depends_on:
       app:
         condition: service_started
@@ -64,6 +64,8 @@ services:
     platform: linux/amd64
     environment:
       ENVIRONMENT: ci
+      SMPLKIT_ENVIRONMENT: ci
+      SMPLKIT_SERVICE: app
       DATABASE_URL: postgresql+psycopg://postgres:postgres@postgres:5432/smplkit_app
       APP_AUTH_SECRET: dev-secret
       APP_AUTH_AUDIENCE: smplkit-app

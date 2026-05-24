@@ -11,6 +11,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/listplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
@@ -100,8 +101,12 @@ func (r *flagResource) Schema(_ context.Context, _ resource.SchemaRequest, resp 
 				PlanModifiers: []planmodifier.String{stringplanmodifier.RequiresReplace()},
 			},
 			"description": schema.StringAttribute{
-				Optional:    true,
-				Description: "Optional free-text description.",
+				Optional: true,
+				Computed: true,
+				Description: "Optional free-text description. The server normalizes an absent description " +
+					"to an empty string, so the attribute is also `Computed` — Terraform won't churn on the " +
+					"null-vs-empty distinction.",
+				PlanModifiers: []planmodifier.String{stringplanmodifier.UseStateForUnknown()},
 			},
 			"default": schema.StringAttribute{
 				Required: true,
@@ -111,8 +116,12 @@ func (r *flagResource) Schema(_ context.Context, _ resource.SchemaRequest, resp 
 			},
 			"values": schema.ListNestedAttribute{
 				Optional: true,
+				Computed: true,
 				Description: "Optional closed set of allowed values for this flag. When omitted the flag accepts any " +
-					"value of `type`; when set the console renders a dropdown of these named options.",
+					"value of `type`; when set the console renders a dropdown of these named options. BOOLEAN flags " +
+					"get a server-provided `[{True,true}, {False,false}]` value set, so the attribute is also " +
+					"`Computed` to avoid a plan diff for the boolean case.",
+				PlanModifiers: []planmodifier.List{listplanmodifier.UseStateForUnknown()},
 				NestedObject: schema.NestedAttributeObject{
 					Attributes: map[string]schema.Attribute{
 						"name": schema.StringAttribute{

@@ -1,6 +1,8 @@
 package provider
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"os"
 	"testing"
@@ -9,6 +11,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/providerserver"
 	"github.com/hashicorp/terraform-plugin-go/tfprotov6"
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
+	smplkit "github.com/smplkit/go-sdk/v3"
 )
 
 // Acceptance tests run against a real smplkit platform (the local
@@ -77,10 +80,46 @@ resource "smplkit_service" "test" {
 
 // ─── smplkit_environment ───────────────────────────────────────────────────
 
+// freeOneManagedEnvironmentSlot deletes the seeded `development`
+// environment, if it exists, so the test below has a free
+// platform.managed_environments slot to spend. A fresh free-tier
+// account is born at 2/2 (production + development, both
+// managed=true) per ADR-051 §3.4; production is system-protected and
+// cannot be deleted, so development is the only candidate.
+//
+// Idempotent — a NotFoundError on delete is treated as "already
+// gone", which lets a test rerun against a tenant that's already
+// been pruned.
+func freeOneManagedEnvironmentSlot(t *testing.T) {
+	t.Helper()
+	apiKey := os.Getenv("SMPLKIT_API_KEY")
+	if apiKey == "" {
+		t.Skip("SMPLKIT_API_KEY not set; skipping env-slot prep")
+	}
+	cfg := smplkit.ManagementConfig{APIKey: apiKey}
+	if base := os.Getenv("SMPLKIT_API_URL"); base != "" {
+		cfg.Scheme = "http"
+		cfg.BaseDomain = "localhost"
+	}
+	client, err := smplkit.NewManagementClient(cfg)
+	if err != nil {
+		t.Fatalf("management client: %v", err)
+	}
+	if err := client.Environments().Delete(context.Background(), "development"); err != nil {
+		var nf *smplkit.NotFoundError
+		if !errors.As(err, &nf) {
+			t.Fatalf("failed to free slot by deleting `development`: %v", err)
+		}
+	}
+}
+
 func TestAccEnvironmentResource_basic(t *testing.T) {
 	id := fmt.Sprintf("tfacc-env-%d", time.Now().UnixNano())
 	resource.Test(t, resource.TestCase{
-		PreCheck:                 func() { testAccPreCheck(t) },
+		PreCheck: func() {
+			testAccPreCheck(t)
+			freeOneManagedEnvironmentSlot(t)
+		},
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		Steps: []resource.TestStep{
 			{
@@ -256,10 +295,18 @@ resource "smplkit_audit_forwarder" "test" {
 
   configuration = {
     url = "https://splunk.example.com:8088/services/collector/event"
-    headers = [{
-      name  = "Authorization"
-      value = "Splunk acc-test-token"
-    }]
+    headers = [
+      {
+        name  = "Authorization"
+        value = "Splunk acc-test-token"
+      },
+      # Splunk HEC requires a Content-Type header — the audit service
+      # validates this at the API edge for the splunk_hec type.
+      {
+        name  = "Content-Type"
+        value = "application/json"
+      },
+    ]
   }
 }
 `, id),

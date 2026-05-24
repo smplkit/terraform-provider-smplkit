@@ -163,9 +163,9 @@ func (r *auditForwarderResource) Schema(_ context.Context, _ resource.SchemaRequ
 				PlanModifiers: []planmodifier.String{stringplanmodifier.UseStateForUnknown()},
 			},
 			"updated_at": schema.StringAttribute{
-				Computed:      true,
-				Description:   "RFC3339 timestamp set by the server on every write.",
-				PlanModifiers: []planmodifier.String{stringplanmodifier.UseStateForUnknown()},
+				Computed: true,
+				Description: "RFC3339 timestamp set by the server on every write. " +
+					"Recomputed on every apply, so plans involving updates show this as `(known after apply)`.",
 			},
 			"version": schema.Int64Attribute{
 				Computed:    true,

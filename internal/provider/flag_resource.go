@@ -11,7 +11,6 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
-	"github.com/hashicorp/terraform-plugin-framework/resource/schema/listplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
@@ -116,12 +115,11 @@ func (r *flagResource) Schema(_ context.Context, _ resource.SchemaRequest, resp 
 			},
 			"values": schema.ListNestedAttribute{
 				Optional: true,
-				Computed: true,
 				Description: "Optional closed set of allowed values for this flag. When omitted the flag accepts any " +
-					"value of `type`; when set the console renders a dropdown of these named options. BOOLEAN flags " +
-					"get a server-provided `[{True,true}, {False,false}]` value set, so the attribute is also " +
-					"`Computed` to avoid a plan diff for the boolean case.",
-				PlanModifiers: []planmodifier.List{listplanmodifier.UseStateForUnknown()},
+					"value of `type`; when set the console renders a dropdown of these named options. The Go SDK " +
+					"client-side auto-populates `[{True,true},{False,false}]` for BOOLEAN flags; the provider " +
+					"overrides that to nil when the user didn't supply a list, so the wire request omits values and " +
+					"the state stays free of a server-default the user didn't ask for.",
 				NestedObject: schema.NestedAttributeObject{
 					Attributes: map[string]schema.Attribute{
 						"name": schema.StringAttribute{
@@ -181,9 +179,9 @@ func (r *flagResource) Schema(_ context.Context, _ resource.SchemaRequest, resp 
 				PlanModifiers: []planmodifier.String{stringplanmodifier.UseStateForUnknown()},
 			},
 			"updated_at": schema.StringAttribute{
-				Computed:      true,
-				Description:   "RFC3339 timestamp set by the server on every write.",
-				PlanModifiers: []planmodifier.String{stringplanmodifier.UseStateForUnknown()},
+				Computed: true,
+				Description: "RFC3339 timestamp set by the server on every write. " +
+					"Recomputed on every apply, so plans involving updates show this as `(known after apply)`.",
 			},
 		},
 	}
@@ -261,6 +259,16 @@ func (r *flagResource) constructFlagFromModel(data *flagResourceModel, diags *di
 	default:
 		diags.AddAttributeError(path.Root("type"), "Unknown flag type", fmt.Sprintf("type %q is not one of %v", data.Type.ValueString(), validFlagTypes))
 		return nil
+	}
+
+	// NewBooleanFlag client-side seeds f.Values to a {True,False} option
+	// set. When the user didn't actually supply a values block we want
+	// the wire request to omit the field — otherwise the resource ends
+	// up with a server-stored option set the user never asked for and
+	// the next plan/apply churns to remove it. nil is the SDK signal
+	// for "don't send."
+	if len(data.Values) == 0 {
+		f.Values = nil
 	}
 
 	// Populate per-environment overrides via the SDK's public mutators

@@ -70,12 +70,12 @@ resource "smplkit_flag" "release_channel" {
 - `description` (String) Optional free-text description. The server normalizes an absent description to an empty string, so the attribute is also `Computed` — Terraform won't churn on the null-vs-empty distinction.
 - `environments` (Attributes Map) Per-environment configuration keyed by environment id (e.g. `production`). Each entry may set `enabled`, an environment-specific `default`, and an ordered list of `rules`. (see [below for nested schema](#nestedatt--environments))
 - `name` (String) Display name shown in the smplkit console. Defaults to a humanized form of `id`.
-- `values` (Attributes List) Optional closed set of allowed values for this flag. When omitted the flag accepts any value of `type`; when set the console renders a dropdown of these named options. BOOLEAN flags get a server-provided `[{True,true}, {False,false}]` value set, so the attribute is also `Computed` to avoid a plan diff for the boolean case. (see [below for nested schema](#nestedatt--values))
+- `values` (Attributes List) Optional closed set of allowed values for this flag. When omitted the flag accepts any value of `type`; when set the console renders a dropdown of these named options. The Go SDK client-side auto-populates `[{True,true},{False,false}]` for BOOLEAN flags; the provider overrides that to nil when the user didn't supply a list, so the wire request omits values and the state stays free of a server-default the user didn't ask for. (see [below for nested schema](#nestedatt--values))
 
 ### Read-Only
 
 - `created_at` (String) RFC3339 timestamp set by the server when the flag was created.
-- `updated_at` (String) RFC3339 timestamp set by the server on every write.
+- `updated_at` (String) RFC3339 timestamp set by the server on every write. Recomputed on every apply, so plans involving updates show this as `(known after apply)`.
 
 <a id="nestedatt--environments"></a>
 ### Nested Schema for `environments`

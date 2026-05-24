@@ -37,7 +37,7 @@ resource "smplkit_environment" "staging" {
 ### Read-Only
 
 - `created_at` (String) RFC3339 timestamp set by the server when the environment was created.
-- `updated_at` (String) RFC3339 timestamp set by the server on every write.
+- `updated_at` (String) RFC3339 timestamp set by the server on every write. Recomputed on every apply, so plans involving updates show this as `(known after apply)`.
 
 ## Import
 

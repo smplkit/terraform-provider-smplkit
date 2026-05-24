@@ -30,7 +30,7 @@ resource "smplkit_service" "user_service" {
 ### Read-Only
 
 - `created_at` (String) RFC3339 timestamp set by the server when the service was created.
-- `updated_at` (String) RFC3339 timestamp set by the server on every write.
+- `updated_at` (String) RFC3339 timestamp set by the server on every write. Recomputed on every apply, so plans involving updates show this as `(known after apply)`.
 
 ## Import
 

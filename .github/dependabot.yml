@@ -1,0 +1,42 @@
+# Dependabot configuration for terraform-provider-smplkit.
+#
+# Two trackers:
+#   - gomod   → keeps github.com/smplkit/go-sdk/v3 and friends fresh.
+#               Uses `fix:` prefix so semantic-release picks bumps up
+#               as patch versions and a new provider release publishes
+#               the upstream change. Go-sdk patch+minor bumps are
+#               auto-merged by the sibling workflow (see
+#               .github/workflows/dependabot-auto-merge.yml); other
+#               gomod bumps and majors land as PRs for review.
+#   - github-actions → keeps workflow action versions current. Uses
+#               `chore:` prefix because workflow updates don't ship to
+#               customers and shouldn't trigger a release.
+#
+# Schedule is daily for both so a go-sdk fix lands in the provider
+# within ~24h without any cross-repo plumbing.
+
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: "/"
+    schedule:
+      interval: daily
+    commit-message:
+      prefix: "fix"
+      include: "scope"
+    open-pull-requests-limit: 10
+    labels:
+      - dependencies
+      - go
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: daily
+    commit-message:
+      prefix: "chore"
+      include: "scope"
+    open-pull-requests-limit: 10
+    labels:
+      - dependencies
+      - github-actions

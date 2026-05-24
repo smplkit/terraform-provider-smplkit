@@ -1,0 +1,85 @@
+name: smoke
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Provider version to install (e.g. 0.1.0)"
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    name: terraform apply against production
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      SMOKE_BASE_URL: https://app.smplkit.com
+      APP_AUTH_SECRET: ${{ secrets.APP_AUTH_SECRET }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.9.8"
+          terraform_wrapper: false
+
+      - name: resolve provider version
+        id: ver
+        run: |
+          if [[ "${{ github.event_name }}" == "release" ]]; then
+            v="${GITHUB_REF_NAME#v}"
+          else
+            v="${{ github.event.inputs.version }}"
+          fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "Smoke-testing provider v$v"
+
+      - name: pin provider version in smoke config
+        run: |
+          sed -i 's|version *= *">=.*"|version = "= ${{ steps.ver.outputs.version }}"|' scripts/smoke/main.tf
+          grep "version =" scripts/smoke/main.tf
+
+      - name: bootstrap ephemeral account
+        id: bootstrap
+        run: python3 scripts/smoke_bootstrap.py
+
+      - name: terraform init
+        working-directory: scripts/smoke
+        env:
+          SMPLKIT_API_KEY: ${{ steps.bootstrap.outputs.SMPLKIT_API_KEY }}
+        run: terraform init -input=false
+
+      - name: terraform apply
+        working-directory: scripts/smoke
+        env:
+          SMPLKIT_API_KEY: ${{ steps.bootstrap.outputs.SMPLKIT_API_KEY }}
+          TF_VAR_smoke_nonce: ${{ github.run_id }}-${{ github.run_attempt }}
+        run: terraform apply -auto-approve -input=false
+
+      - name: terraform plan (drift check)
+        working-directory: scripts/smoke
+        env:
+          SMPLKIT_API_KEY: ${{ steps.bootstrap.outputs.SMPLKIT_API_KEY }}
+          TF_VAR_smoke_nonce: ${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          terraform plan -detailed-exitcode -input=false
+          # exit code 0 = no changes (good); 2 = changes detected (drift)
+
+      - name: terraform destroy
+        if: always()
+        working-directory: scripts/smoke
+        env:
+          SMPLKIT_API_KEY: ${{ steps.bootstrap.outputs.SMPLKIT_API_KEY }}
+          TF_VAR_smoke_nonce: ${{ github.run_id }}-${{ github.run_attempt }}
+        run: terraform destroy -auto-approve -input=false || true
+
+      - name: delete ephemeral account
+        if: always()
+        env:
+          ACCOUNT_TOKEN: ${{ steps.bootstrap.outputs.ACCOUNT_TOKEN }}
+        run: python3 scripts/smoke_teardown.py

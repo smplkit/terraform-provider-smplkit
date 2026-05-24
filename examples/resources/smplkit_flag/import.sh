@@ -1,0 +1,1 @@
+terraform import smplkit_flag.dark_mode dark_mode

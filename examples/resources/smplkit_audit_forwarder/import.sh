@@ -1,0 +1,1 @@
+terraform import smplkit_audit_forwarder.splunk_prod splunk-prod

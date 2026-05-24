@@ -1,0 +1,1 @@
+terraform import smplkit_service.user_service user_service

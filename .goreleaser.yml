@@ -1,0 +1,75 @@
+# GoReleaser configuration for the smplkit Terraform provider.
+#
+# Produces the Registry-expected layout: per-OS/arch zips, a signed
+# SHA256SUMS file, and a terraform-registry-manifest.json. The signing
+# key (GPG_SIGNING_KEY / GPG_SIGNING_PASSWORD) is exported by the
+# release workflow before this runs — Maven Central's key sometimes
+# arrives base64-encoded, so the workflow decodes it before piping it
+# into `gpg --import`.
+
+version: 2
+
+before:
+  hooks:
+    - go mod download
+
+builds:
+  - id: terraform-provider-smplkit
+    main: ./
+    binary: '{{ .ProjectName }}_v{{ .Version }}'
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X main.version={{.Version}} -X main.commit={{.Commit}}
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - freebsd
+      - windows
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - '386'
+      - arm
+      - arm64
+    ignore:
+      - goos: darwin
+        goarch: '386'
+    mod_timestamp: '{{ .CommitTimestamp }}'
+
+archives:
+  - id: zip
+    format: zip
+    name_template: '{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}'
+
+checksum:
+  extra_files:
+    - glob: 'terraform-registry-manifest.json'
+      name_template: '{{ .ProjectName }}_{{ .Version }}_manifest.json'
+  name_template: '{{ .ProjectName }}_{{ .Version }}_SHA256SUMS'
+  algorithm: sha256
+
+signs:
+  - artifacts: checksum
+    args:
+      # Pinentry-less batch signing of the SHA256SUMS file.
+      - "--batch"
+      - "--local-user"
+      - "{{ .Env.GPG_FINGERPRINT }}"
+      - "--passphrase"
+      - "{{ .Env.GPG_SIGNING_PASSWORD }}"
+      - "--pinentry-mode"
+      - "loopback"
+      - "--output"
+      - "${signature}"
+      - "--detach-sign"
+      - "${artifact}"
+
+release:
+  extra_files:
+    - glob: 'terraform-registry-manifest.json'
+      name_template: '{{ .ProjectName }}_{{ .Version }}_manifest.json'
+
+changelog:
+  disable: true

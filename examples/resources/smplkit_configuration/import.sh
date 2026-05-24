@@ -1,0 +1,1 @@
+terraform import smplkit_configuration.app_settings app_settings

@@ -1,0 +1,1 @@
+terraform import smplkit_environment.staging staging

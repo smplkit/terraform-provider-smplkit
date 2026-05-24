@@ -1,0 +1,23 @@
+# Compiled binaries
+terraform-provider-smplkit
+terraform-provider-smplkit_v*
+
+# Test artifacts
+coverage.out
+*.test
+*.prof
+
+# Local development
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+.terraform.lock.hcl
+
+# Editor noise
+.vscode/
+.idea/
+*.swp
+
+# Goreleaser output
+dist/

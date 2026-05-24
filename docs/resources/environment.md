@@ -32,7 +32,7 @@ resource "smplkit_environment" "staging" {
 ### Optional
 
 - `classification` (String) `STANDARD` (default, deliberately created and visible in the standard column set) or `AD_HOC` (transient — typically discovered by an SDK). Terraform usually wants STANDARD.
-- `color` (String) Optional hex color code (e.g. `#ef4444`) used by the console to tag this environment.
+- `color` (String) Hex color code (e.g. `#ef4444`) used by the console to tag this environment. If omitted the server assigns a default (currently `#6b7280`), so the attribute is also `Computed` to avoid a plan diff for the no-color case.
 
 ### Read-Only
 

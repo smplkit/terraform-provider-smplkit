@@ -198,6 +198,92 @@ resource "smplkit_configuration" "test" {
 	})
 }
 
+// TestAccConfigurationResource_sameRunEnvOverride is a regression test
+// for a production-only bug surfaced by the smoke run: when a
+// Terraform plan creates an environment and a configuration with a
+// per-environment override referencing that environment in the same
+// apply, the config service silently drops the override entry
+// instead of either honoring it or returning 400 per ADR-051 §3.3.
+// The framework then rejects the apply with "produced inconsistent
+// result" because the response's `environments` map is null while
+// the plan declared a non-null map.
+//
+// Gated on SMPLKIT_API_URL pointing at production. The bug doesn't
+// reproduce against the local platform (everything on one
+// docker-compose stack, no cross-service propagation delay), so
+// running this test against the CI local platform would pass and
+// give false confidence. CI sets SMPLKIT_API_URL=http://localhost
+// and so skips this test, keeping main green; manual production
+// runs exercise it.
+//
+// To run against production:
+//
+//	SMPLKIT_API_URL=https://app.smplkit.com \
+//	SMPLKIT_API_KEY=sk_api_... \
+//	TF_ACC=1 \
+//	go test -run TestAccConfigurationResource_sameRunEnvOverride \
+//	  ./internal/provider/... -v -count=1
+//
+// Until the server-side fix lands the test FAILS at apply. After the
+// fix lands it should pass — the assertion on the round-tripped
+// override value is the success signal.
+func TestAccConfigurationResource_sameRunEnvOverride(t *testing.T) {
+	if os.Getenv("SMPLKIT_API_URL") != "https://app.smplkit.com" {
+		t.Skip("production-only regression test; set SMPLKIT_API_URL=https://app.smplkit.com to run")
+	}
+
+	envID := fmt.Sprintf("tfacc-bug-env-%d", time.Now().UnixNano())
+	cfgID := fmt.Sprintf("tfacc-bug-cfg-%d", time.Now().UnixNano())
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: testProviderConfig() + fmt.Sprintf(`
+resource "smplkit_environment" "test" {
+  id   = %[1]q
+  name = "Bug Repro Env"
+}
+
+resource "smplkit_configuration" "test" {
+  id   = %[2]q
+  name = "Bug Repro Configuration"
+
+  items = {
+    cache_ttl_seconds = jsonencode(300)
+  }
+
+  # The same-run interaction under test: the override key references
+  # smplkit_environment.test, which Terraform creates earlier in this
+  # same apply. The server must either honor this override or return
+  # 400 per ADR-051 §3.3 — the silent-drop path is the bug.
+  environments = {
+    (smplkit_environment.test.id) = {
+      cache_ttl_seconds = jsonencode(60)
+    }
+  }
+}
+`, envID, cfgID),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					// Until the fix lands the apply never reaches
+					// this Check — the framework fails the step on
+					// "produced inconsistent result" first. After
+					// the fix the apply succeeds and this assertion
+					// is the actual regression signal: the override
+					// must round-trip through the server with the
+					// value we sent.
+					resource.TestCheckResourceAttr(
+						"smplkit_configuration.test",
+						fmt.Sprintf("environments.%s.cache_ttl_seconds", envID),
+						"60",
+					),
+				),
+			},
+		},
+	})
+}
+
 // ─── smplkit_flag ──────────────────────────────────────────────────────────
 
 func TestAccFlagResource_withRulesAndOverrides(t *testing.T) {

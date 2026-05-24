@@ -55,8 +55,12 @@ func (r *environmentResource) Schema(_ context.Context, _ resource.SchemaRequest
 				Description: "Display name shown in the smplkit console.",
 			},
 			"color": schema.StringAttribute{
-				Optional:    true,
-				Description: "Optional hex color code (e.g. `#ef4444`) used by the console to tag this environment.",
+				Optional: true,
+				Computed: true,
+				Description: "Hex color code (e.g. `#ef4444`) used by the console to tag this environment. " +
+					"If omitted the server assigns a default (currently `#6b7280`), so the attribute is also " +
+					"`Computed` to avoid a plan diff for the no-color case.",
+				PlanModifiers: []planmodifier.String{stringplanmodifier.UseStateForUnknown()},
 			},
 			"classification": schema.StringAttribute{
 				Optional: true,

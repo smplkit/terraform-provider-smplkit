@@ -1,8 +1,15 @@
 name: smoke
 
+# Triggered after the release workflow completes so the
+# just-published provider is exercised end-to-end against production.
+# `workflow_run` doesn't suffer the GITHUB_TOKEN-can't-trigger
+# limitation that `release: published` does when the release was cut
+# by goreleaser inside another workflow.
 on:
-  release:
-    types: [published]
+  workflow_run:
+    workflows: ["release"]
+    types: [completed]
+    branches: [main]
   workflow_dispatch:
     inputs:
       version:
@@ -15,6 +22,10 @@ permissions:
 jobs:
   smoke:
     name: terraform apply against production
+    # When triggered by workflow_run, only proceed if the upstream
+    # release succeeded — a failed release run leaves no artifact to
+    # smoke against.
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
@@ -22,6 +33,13 @@ jobs:
       APP_AUTH_SECRET: ${{ secrets.APP_AUTH_SECRET }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          # workflow_run defaults to the workflow file's branch, not the
+          # commit that produced the release — explicitly check out the
+          # commit that triggered the upstream run so the smoke
+          # Terraform pinned at the right provider version matches the
+          # release content.
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
 
       - uses: hashicorp/setup-terraform@v3
         with:
@@ -31,10 +49,18 @@ jobs:
       - name: resolve provider version
         id: ver
         run: |
-          if [[ "${{ github.event_name }}" == "release" ]]; then
-            v="${GITHUB_REF_NAME#v}"
-          else
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
             v="${{ github.event.inputs.version }}"
+          else
+            # Latest published release on the repo. The release workflow
+            # ran immediately before this one; its tag is what we test.
+            v=$(/usr/bin/curl -sH "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/${{ github.repository }}/releases/latest" \
+              | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["tag_name"].lstrip("v"))')
+          fi
+          if [[ -z "$v" ]]; then
+            echo "::error::could not determine smoke version"
+            exit 1
           fi
           echo "version=$v" >> "$GITHUB_OUTPUT"
           echo "Smoke-testing provider v$v"

@@ -36,13 +36,6 @@ jobs:
       SMOKE_BASE_URL: http://app.localhost
     steps:
       - uses: actions/checkout@v4
-        with:
-          path: provider
-
-      - uses: actions/checkout@v4
-        with:
-          repository: smplkit/.github
-          path: dot-github
 
       - name: configure AWS credentials via OIDC
         uses: aws-actions/configure-aws-credentials@v4
@@ -56,18 +49,19 @@ jobs:
             | docker login --username AWS --password-stdin "299349364328.dkr.ecr.${AWS_REGION}.amazonaws.com"
 
       - name: pull platform images
-        working-directory: dot-github/platform
-        run: docker compose -f docker-compose.ci.yml pull
+        working-directory: ci
+        run: docker compose pull
 
       - name: start postgres
-        working-directory: dot-github/platform
+        working-directory: ci
         run: |
-          docker compose -f docker-compose.ci.yml up -d postgres
-          # The healthcheck declared in the compose file is what
-          # `service_healthy` waits on; surface its status here so a
-          # postgres-side failure is visible early in the log.
+          docker compose up -d postgres
+          # Compose's `service_healthy` gate waits on the declared
+          # postgres healthcheck; this loop surfaces the same signal
+          # to the workflow log so a postgres-side problem is visible
+          # early.
           for i in {1..30}; do
-            if docker compose -f docker-compose.ci.yml ps postgres --format json \
+            if docker compose ps postgres --format json \
                 | grep -q '"Health":"healthy"'; then
               echo "postgres is healthy"
               break
@@ -76,34 +70,33 @@ jobs:
           done
 
       - name: run alembic migrations
-        working-directory: dot-github/platform
+        working-directory: ci
         run: |
           for svc in app config flags logging audit; do
             echo "::group::alembic upgrade head on ${svc}"
-            docker compose -f docker-compose.ci.yml run --rm --entrypoint "" "$svc" alembic upgrade head
+            docker compose run --rm --entrypoint "" "$svc" alembic upgrade head
             echo "::endgroup::"
           done
 
       - name: start platform services
-        working-directory: dot-github/platform
-        run: docker compose -f docker-compose.ci.yml up -d
+        working-directory: ci
+        run: docker compose up -d
 
       - name: wait for platform liveness
-        run: ./provider/scripts/wait_for_platform.sh
+        run: ./scripts/wait_for_platform.sh
 
       - name: bootstrap account + API key
         id: bootstrap
-        run: python3 provider/scripts/smoke_bootstrap.py
+        run: python3 scripts/smoke_bootstrap.py
 
       - name: setup go
         uses: actions/setup-go@v5
         with:
           go-version: "1.24"
           cache: true
-          cache-dependency-path: provider/go.sum
+          cache-dependency-path: go.sum
 
       - name: run acceptance tests
-        working-directory: provider
         env:
           SMPLKIT_API_KEY: ${{ steps.bootstrap.outputs.SMPLKIT_API_KEY }}
           TF_ACC: "1"
@@ -111,15 +104,15 @@ jobs:
 
       - name: dump platform logs on failure
         if: failure()
-        working-directory: dot-github/platform
+        working-directory: ci
         run: |
           for svc in postgres caddy app config flags logging audit; do
             echo "::group::logs for ${svc}"
-            docker compose -f docker-compose.ci.yml logs --tail=200 "$svc" || true
+            docker compose logs --tail=200 "$svc" || true
             echo "::endgroup::"
           done
 
       - name: tear down platform
         if: always()
-        working-directory: dot-github/platform
-        run: docker compose -f docker-compose.ci.yml down -v --remove-orphans || true
+        working-directory: ci
+        run: docker compose down -v --remove-orphans || true

@@ -96,6 +96,17 @@ jobs:
           cache: true
           cache-dependency-path: go.sum
 
+      - name: setup terraform cli
+        # terraform-plugin-testing finds Terraform on PATH and uses it
+        # directly; without this step it tries to download a binary
+        # itself and verify the HashiCorp PGP signature, which fails
+        # because the upstream OpenPGP key has expired (a known
+        # ecosystem issue).
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.9.8"
+          terraform_wrapper: false
+
       - name: run acceptance tests
         env:
           SMPLKIT_API_KEY: ${{ steps.bootstrap.outputs.SMPLKIT_API_KEY }}

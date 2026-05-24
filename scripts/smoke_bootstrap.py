@@ -96,8 +96,11 @@ def main() -> int:
     )
     parser.add_argument(
         "--email-suffix",
-        default=os.environ.get("SMOKE_EMAIL_SUFFIX", "smplkit-smoke.invalid"),
-        help="Domain to use for the random throwaway email.",
+        default=os.environ.get("SMOKE_EMAIL_SUFFIX", "smplkit-test.com"),
+        help="Domain to use for the random throwaway email. Cannot be an "
+        "RFC 2606 reserved TLD (.invalid / .test / .localhost / .example) "
+        "because Pydantic EmailStr / email-validator rejects those. The "
+        "convention across smplkit's e2e suite is smplkit-test.com.",
     )
     args = parser.parse_args()
 

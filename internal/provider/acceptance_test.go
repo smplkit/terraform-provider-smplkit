@@ -199,39 +199,24 @@ resource "smplkit_configuration" "test" {
 }
 
 // TestAccConfigurationResource_sameRunEnvOverride is a regression test
-// for a production-only bug surfaced by the smoke run: when a
-// Terraform plan creates an environment and a configuration with a
-// per-environment override referencing that environment in the same
-// apply, the config service silently drops the override entry
-// instead of either honoring it or returning 400 per ADR-051 §3.3.
-// The framework then rejects the apply with "produced inconsistent
-// result" because the response's `environments` map is null while
-// the plan declared a non-null map.
+// for a bug that landed in v1.0.0: a Terraform plan that creates an
+// environment and a sibling configuration referencing that environment
+// in a per-environment override silently dropped the override on the
+// wire. The root cause was a hand-written wrapper in go-sdk that
+// turned the flat per-env shape into an empty envelope when serializing
+// to the old `{values: {key: {value: V}}}` request body; the response
+// then came back with environments=null and the framework rejected the
+// apply with "produced inconsistent result."
 //
-// Gated on SMPLKIT_API_URL pointing at production. The bug doesn't
-// reproduce against the local platform (everything on one
-// docker-compose stack, no cross-service propagation delay), so
-// running this test against the CI local platform would pass and
-// give false confidence. CI sets SMPLKIT_API_URL=http://localhost
-// and so skips this test, keeping main green; manual production
-// runs exercise it.
+// The fix landed across the stack: ADR-024 §2.4 was revised to use the
+// flat `{env: {key: V}}` shape on the wire, the config service and all
+// 6 SDKs were updated, and this test guards the same-plan-env-override
+// case so the bug can't return silently.
 //
-// To run against production:
-//
-//	SMPLKIT_API_URL=https://app.smplkit.com \
-//	SMPLKIT_API_KEY=sk_api_... \
-//	TF_ACC=1 \
-//	go test -run TestAccConfigurationResource_sameRunEnvOverride \
-//	  ./internal/provider/... -v -count=1
-//
-// Until the server-side fix lands the test FAILS at apply. After the
-// fix lands it should pass — the assertion on the round-tripped
-// override value is the success signal.
+// Runs against whatever backend SMPLKIT_API_URL points at — CI's
+// acceptance workflow exercises it against the local platform; the
+// release smoke against production. Gated by TF_ACC=1 like the rest.
 func TestAccConfigurationResource_sameRunEnvOverride(t *testing.T) {
-	if os.Getenv("SMPLKIT_API_URL") != "https://app.smplkit.com" {
-		t.Skip("production-only regression test; set SMPLKIT_API_URL=https://app.smplkit.com to run")
-	}
-
 	envID := fmt.Sprintf("tfacc-bug-env-%d", time.Now().UnixNano())
 	cfgID := fmt.Sprintf("tfacc-bug-cfg-%d", time.Now().UnixNano())
 
@@ -266,13 +251,11 @@ resource "smplkit_configuration" "test" {
 }
 `, envID, cfgID),
 				Check: resource.ComposeAggregateTestCheckFunc(
-					// Until the fix lands the apply never reaches
-					// this Check — the framework fails the step on
-					// "produced inconsistent result" first. After
-					// the fix the apply succeeds and this assertion
-					// is the actual regression signal: the override
-					// must round-trip through the server with the
-					// value we sent.
+					// The regression signal: the override must
+					// round-trip through the server with the value
+					// we sent. If the wrapper or wire shape ever
+					// silently drops the override again, this
+					// assertion goes red.
 					resource.TestCheckResourceAttr(
 						"smplkit_configuration.test",
 						fmt.Sprintf("environments.%s.cache_ttl_seconds", envID),

@@ -46,9 +46,9 @@ the source.
 | `examples/` | Per-resource and per-data-source HCL examples used by `tfplugindocs`. |
 | `templates/` | `tfplugindocs` templates (currently just the provider overview page). |
 | `docs/` | Generated docs the Terraform Registry ingests — kept in sync via CI. |
-| `scripts/smoke*.py` | Bootstrap and teardown for the release-smoke ephemeral account. |
-| `scripts/smoke/main.tf` | The smoke-test Terraform config (six resources, one each). |
-| `.github/workflows/` | `ci.yml` (build/lint/test/docs check), `release.yml` (semantic-release + GoReleaser), `smoke.yml` (release smoke). |
+| `ci/` | Docker-compose + Caddyfile + DB init for the acceptance-test platform stack. |
+| `scripts/wait_for_platform.sh` | Helper used by the acceptance workflow to poll `/api/liveness` per service through Caddy. |
+| `.github/workflows/` | `ci.yml` (build/lint/test/docs check), `release.yml` (semantic-release + GoReleaser), `acceptance.yml` (TF_ACC suite against a CI-booted local platform). |
 
 ## Development
 
@@ -82,11 +82,14 @@ encrypts them at rest and reads return `<redacted>`.
 
 ### Production smoke
 
-The release smoke job (`.github/workflows/smoke.yml`) provisions an
-ephemeral account, runs `terraform apply` / `terraform destroy` against
-production, and deletes the account in an `if: always()` step. It uses
-the ADR-036 HMAC verification-token mint to short-circuit the email-
-verification flow, so the only secret it consumes is `APP_AUTH_SECRET`.
+Production smoke lives in a separate private repo,
+[`terraform-provider-smplkit-smoke`](https://github.com/smplkit/terraform-provider-smplkit-smoke).
+The split is a trust-boundary choice: the smoke needs the
+production `APP_AUTH_SECRET` (the platform's JWT signing key) to mint
+a verified throwaway account, and hosting that workflow in a public
+repo would put the secret one workflow-injection PR away from a
+leak. The private repo runs the smoke daily and on manual dispatch,
+against the latest GitHub Release of this provider.
 
 ## Publishing
 

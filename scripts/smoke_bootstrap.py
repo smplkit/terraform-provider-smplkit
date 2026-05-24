@@ -105,6 +105,17 @@ def main() -> int:
     if not secret:
         raise SystemExit("APP_AUTH_SECRET environment variable is required")
 
+    # When SMPLKIT_RATE_LIMIT_BYPASS_TOKEN is set the script sends it as
+    # the X-Rate-Limit-Bypass header on every request. This is meant
+    # for runs against the local platform where /auth/register's
+    # 5/hour limit can interfere with tight CI re-runs. Against
+    # production we leave it unset and accept the 5/hour budget — the
+    # smoke job only fires on releases, so it's plenty.
+    bypass_token = os.environ.get("SMPLKIT_RATE_LIMIT_BYPASS_TOKEN", "")
+    extra_headers: dict[str, str] = {}
+    if bypass_token:
+        extra_headers["X-Rate-Limit-Bypass"] = bypass_token
+
     nonce = secrets.token_hex(6)
     email = f"smoke-{int(time.time())}-{nonce}@{args.email_suffix}"
     password = secrets.token_urlsafe(20)
@@ -113,7 +124,7 @@ def main() -> int:
     reg = post_json(
         f"{args.base_url}/api/v1/auth/register",
         {"email": email, "password": password},
-        {},
+        extra_headers,
     )
     token = reg.get("token") or reg.get("data", {}).get("attributes", {}).get("token")
     if not token:
@@ -130,11 +141,13 @@ def main() -> int:
     verify_resp = post_json(
         f"{args.base_url}/api/v1/auth/verify-email",
         {"token": verification},
-        {},
+        extra_headers,
     )
     new_token = verify_resp.get("token") or token  # endpoint optionally returns a fresh token
 
     # 3. Create API key
+    key_headers = dict(extra_headers)
+    key_headers["Authorization"] = f"Bearer {new_token}"
     key_resp = post_json(
         f"{args.base_url}/api/v1/api_keys",
         {
@@ -146,7 +159,7 @@ def main() -> int:
                 },
             }
         },
-        {"Authorization": f"Bearer {new_token}"},
+        key_headers,
     )
     attrs = key_resp.get("data", {}).get("attributes", {})
     api_key = attrs.get("key") or attrs.get("value") or attrs.get("token")

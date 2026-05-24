@@ -17,6 +17,7 @@ coverage.out
 # Editor noise
 .vscode/
 .idea/
+.claude/
 *.swp
 
 # Goreleaser output

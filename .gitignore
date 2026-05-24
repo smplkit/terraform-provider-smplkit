@@ -21,3 +21,8 @@ coverage.out
 
 # Goreleaser output
 dist/
+
+# Release tooling installed by the release workflow
+node_modules/
+package-lock.json
+package.json

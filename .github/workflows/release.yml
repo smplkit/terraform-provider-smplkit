@@ -29,8 +29,11 @@ jobs:
         with:
           node-version: "20"
 
-      - name: install semantic-release
+      - name: install semantic-release (in /tmp so the workspace stays clean)
         run: |
+          mkdir -p /tmp/semrel
+          cd /tmp/semrel
+          npm init -y >/dev/null
           npm install --no-save --no-fund --no-audit \
             semantic-release@22 \
             @semantic-release/commit-analyzer@11 \
@@ -47,7 +50,10 @@ jobs:
           # let semantic-release publish the GitHub release here —
           # GoReleaser owns that so the signed checksums and manifest
           # land in the same release.
-          npx semantic-release --dry-run > /tmp/semrel.out 2>&1 || true
+          # Run semantic-release from /tmp/semrel so the workspace
+          # tree stays clean — GoReleaser refuses to release when
+          # `git status -s` reports any untracked files.
+          /tmp/semrel/node_modules/.bin/semantic-release --dry-run > /tmp/semrel.out 2>&1 || true
           cat /tmp/semrel.out
           version=$(grep -oE 'next release version is [0-9]+\.[0-9]+\.[0-9]+' /tmp/semrel.out | tail -1 | awk '{print $5}')
           if [[ -z "$version" ]]; then
@@ -64,6 +70,15 @@ jobs:
           git config user.email "release@smplkit.com"
           git tag -a "v$version" -m "Release v$version"
           git push "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "v$version"
+
+      - name: verify workspace is clean before GoReleaser
+        if: steps.release.outputs.released == 'true'
+        run: |
+          # GoReleaser's dirty-state check rejects any untracked file.
+          # Drop common offenders before the build runs.
+          rm -rf node_modules dist .terraform .terraform.lock.hcl coverage.out
+          git status --short
+          test -z "$(git status --short)" || { echo 'workspace still dirty'; exit 1; }
 
       - name: import GPG key
         if: steps.release.outputs.released == 'true'

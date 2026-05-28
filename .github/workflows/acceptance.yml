@@ -102,7 +102,7 @@ jobs:
         # itself and verify the HashiCorp PGP signature, which fails
         # because the upstream OpenPGP key has expired (a known
         # ecosystem issue).
-        uses: hashicorp/setup-terraform@v3
+        uses: hashicorp/setup-terraform@v4
         with:
           terraform_version: "1.9.8"
           terraform_wrapper: false

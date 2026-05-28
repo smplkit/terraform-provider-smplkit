@@ -35,7 +35,7 @@ jobs:
       SMPLKIT_RATE_LIMIT_BYPASS_TOKEN: "7f3e9a2b-1c4d-4e8f-b6a5-9d0e2f8c7b3a"
       SMOKE_BASE_URL: http://app.localhost
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: configure AWS credentials via OIDC
         uses: aws-actions/configure-aws-credentials@v4

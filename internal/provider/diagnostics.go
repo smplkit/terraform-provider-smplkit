@@ -120,7 +120,7 @@ func formatErrors(details []smplkit.ApiErrorDetail) string {
 		var b strings.Builder
 		b.WriteString("- ")
 		if d.Code != "" {
-			b.WriteString(fmt.Sprintf("[%s] ", d.Code))
+			fmt.Fprintf(&b, "[%s] ", d.Code)
 		}
 		if d.Title != "" {
 			b.WriteString(d.Title)
@@ -132,7 +132,7 @@ func formatErrors(details []smplkit.ApiErrorDetail) string {
 			b.WriteString(d.Detail)
 		}
 		if d.Source.Pointer != "" {
-			b.WriteString(fmt.Sprintf(" (at %s)", d.Source.Pointer))
+			fmt.Fprintf(&b, " (at %s)", d.Source.Pointer)
 		}
 		lines = append(lines, b.String())
 	}

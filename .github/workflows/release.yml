@@ -113,7 +113,7 @@ jobs:
 
       - name: install GoReleaser
         if: steps.release.outputs.released == 'true'
-        uses: goreleaser/goreleaser-action@v6
+        uses: goreleaser/goreleaser-action@v7
         with:
           install-only: true
           version: "~> v2"

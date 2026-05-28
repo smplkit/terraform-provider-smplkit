@@ -90,7 +90,7 @@ jobs:
         run: python3 scripts/smoke_bootstrap.py
 
       - name: setup go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version: "1.24"
           cache: true

@@ -350,6 +350,31 @@ func (d *flagDataSource) Read(ctx context.Context, req datasource.ReadRequest, r
 
 // ───── smplkit_audit_forwarder ─────────────────────────────────────────────
 
+// forwarderConfigurationDataSourceAttribute builds the read-only nested
+// configuration block shared by the forwarder data source's base
+// `configuration` and each per-environment override `configuration`.
+func forwarderConfigurationDataSourceAttribute(description string) dsschema.SingleNestedAttribute {
+	return dsschema.SingleNestedAttribute{
+		Computed:    true,
+		Description: description,
+		Attributes: map[string]dsschema.Attribute{
+			"url":            dsschema.StringAttribute{Computed: true, Description: "Destination URL."},
+			"method":         dsschema.StringAttribute{Computed: true, Description: "HTTP method."},
+			"success_status": dsschema.StringAttribute{Computed: true, Description: "Required success status."},
+			"headers": dsschema.ListNestedAttribute{
+				Computed:    true,
+				Description: "Headers attached to every outbound request (values redacted).",
+				NestedObject: dsschema.NestedAttributeObject{
+					Attributes: map[string]dsschema.Attribute{
+						"name":  dsschema.StringAttribute{Computed: true, Description: "Header name."},
+						"value": dsschema.StringAttribute{Computed: true, Sensitive: true, Description: "Header value (always `<redacted>`)."},
+					},
+				},
+			},
+		},
+	}
+}
+
 // NewAuditForwarderDataSource returns the read-only data source for forwarders.
 func NewAuditForwarderDataSource() datasource.DataSource {
 	return &auditForwarderDataSource{}
@@ -372,32 +397,24 @@ func (d *auditForwarderDataSource) Schema(_ context.Context, _ datasource.Schema
 			"name":           dsschema.StringAttribute{Computed: true, Description: "Display name."},
 			"description":    dsschema.StringAttribute{Computed: true, Description: "Optional description."},
 			"forwarder_type": dsschema.StringAttribute{Computed: true, Description: "Destination family."},
-			"enabled":        dsschema.BoolAttribute{Computed: true, Description: "Whether deliveries are attempted."},
-			"filter":         dsschema.StringAttribute{Computed: true, Description: "JSON Logic filter (JSON-encoded)."},
-			"transform":      dsschema.StringAttribute{Computed: true, Description: "Transform expression."},
-			"transform_type": dsschema.StringAttribute{Computed: true, Description: "Transform engine (currently JSONATA)."},
-			"configuration": dsschema.SingleNestedAttribute{
-				Computed:    true,
-				Description: "Destination HTTP request configuration. Header values are redacted.",
-				Attributes: map[string]dsschema.Attribute{
-					"url":            dsschema.StringAttribute{Computed: true, Description: "Destination URL."},
-					"method":         dsschema.StringAttribute{Computed: true, Description: "HTTP method."},
-					"success_status": dsschema.StringAttribute{Computed: true, Description: "Required success status."},
-					"headers": dsschema.ListNestedAttribute{
-						Computed:    true,
-						Description: "Headers attached to every outbound request (values redacted).",
-						NestedObject: dsschema.NestedAttributeObject{
-							Attributes: map[string]dsschema.Attribute{
-								"name":  dsschema.StringAttribute{Computed: true, Description: "Header name."},
-								"value": dsschema.StringAttribute{Computed: true, Sensitive: true, Description: "Header value (always `<redacted>`)."},
-							},
-						},
+			"environments": dsschema.MapNestedAttribute{
+				Computed: true,
+				Description: "Per-environment configuration keyed by environment id. The forwarder delivers events " +
+					"in an environment only when that environment's entry is `enabled`.",
+				NestedObject: dsschema.NestedAttributeObject{
+					Attributes: map[string]dsschema.Attribute{
+						"enabled":       dsschema.BoolAttribute{Computed: true, Description: "Whether the forwarder delivers events in this environment."},
+						"configuration": forwarderConfigurationDataSourceAttribute("Per-environment HTTP request configuration override. Header values are redacted."),
 					},
 				},
 			},
-			"created_at": dsschema.StringAttribute{Computed: true, Description: "RFC3339 creation timestamp."},
-			"updated_at": dsschema.StringAttribute{Computed: true, Description: "RFC3339 last-modified timestamp."},
-			"version":    dsschema.Int64Attribute{Computed: true, Description: "Monotonic version counter."},
+			"filter":         dsschema.StringAttribute{Computed: true, Description: "JSON Logic filter (JSON-encoded)."},
+			"transform":      dsschema.StringAttribute{Computed: true, Description: "Transform expression."},
+			"transform_type": dsschema.StringAttribute{Computed: true, Description: "Transform engine (currently JSONATA)."},
+			"configuration":  forwarderConfigurationDataSourceAttribute("Destination HTTP request configuration. Header values are redacted."),
+			"created_at":     dsschema.StringAttribute{Computed: true, Description: "RFC3339 creation timestamp."},
+			"updated_at":     dsschema.StringAttribute{Computed: true, Description: "RFC3339 last-modified timestamp."},
+			"version":        dsschema.Int64Attribute{Computed: true, Description: "Monotonic version counter."},
 		},
 	}
 }

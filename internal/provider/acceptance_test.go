@@ -360,7 +360,17 @@ resource "smplkit_audit_forwarder" "test" {
   id             = %[1]q
   name           = "Acc Forwarder"
   forwarder_type = "splunk_hec"
-  enabled        = false
+
+  # Enablement is per-environment (ADR-055). production is a managed
+  # environment seeded on every account and is system-protected — it
+  # cannot be deleted, so it's the one stable target the acceptance
+  # harness can always rely on (the sibling environment test prunes
+  # development, so we don't depend on that slot here).
+  environments = {
+    production = {
+      enabled = true
+    }
+  }
 
   configuration = {
     url = "https://splunk.example.com:8088/services/collector/event"
@@ -381,7 +391,7 @@ resource "smplkit_audit_forwarder" "test" {
 `, id),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("smplkit_audit_forwarder.test", "forwarder_type", "splunk_hec"),
-					resource.TestCheckResourceAttr("smplkit_audit_forwarder.test", "enabled", "false"),
+					resource.TestCheckResourceAttr("smplkit_audit_forwarder.test", "environments.production.enabled", "true"),
 					resource.TestCheckResourceAttr("smplkit_audit_forwarder.test", "configuration.url", "https://splunk.example.com:8088/services/collector/event"),
 					resource.TestCheckResourceAttr("smplkit_audit_forwarder.test", "configuration.headers.0.name", "Authorization"),
 				),

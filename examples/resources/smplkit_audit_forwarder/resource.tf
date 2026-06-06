@@ -8,7 +8,13 @@ resource "smplkit_audit_forwarder" "splunk_prod" {
   name           = "Splunk HEC — Production"
   description    = "Forwards audit events to the production Splunk instance."
   forwarder_type = "splunk_hec"
-  enabled        = true
+
+  # Enablement is per-environment. Deliver in production, leave staging
+  # off. An environment with no entry receives no deliveries.
+  environments = {
+    production = { enabled = true }
+    staging    = { enabled = false }
+  }
 
   # Optional JSON Logic filter — only forward events about flag changes.
   filter = jsonencode({

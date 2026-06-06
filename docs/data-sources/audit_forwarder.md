@@ -30,7 +30,7 @@ data "smplkit_audit_forwarder" "splunk_prod" {
 - `configuration` (Attributes) Destination HTTP request configuration. Header values are redacted. (see [below for nested schema](#nestedatt--configuration))
 - `created_at` (String) RFC3339 creation timestamp.
 - `description` (String) Optional description.
-- `enabled` (Boolean) Whether deliveries are attempted.
+- `environments` (Attributes Map) Per-environment configuration keyed by environment id. The forwarder delivers events in an environment only when that environment's entry is `enabled`. (see [below for nested schema](#nestedatt--environments))
 - `filter` (String) JSON Logic filter (JSON-encoded).
 - `forwarder_type` (String) Destination family.
 - `name` (String) Display name.
@@ -51,6 +51,34 @@ Read-Only:
 
 <a id="nestedatt--configuration--headers"></a>
 ### Nested Schema for `configuration.headers`
+
+Read-Only:
+
+- `name` (String) Header name.
+- `value` (String, Sensitive) Header value (always `<redacted>`).
+
+
+
+<a id="nestedatt--environments"></a>
+### Nested Schema for `environments`
+
+Read-Only:
+
+- `configuration` (Attributes) Per-environment HTTP request configuration override. Header values are redacted. (see [below for nested schema](#nestedatt--environments--configuration))
+- `enabled` (Boolean) Whether the forwarder delivers events in this environment.
+
+<a id="nestedatt--environments--configuration"></a>
+### Nested Schema for `environments.configuration`
+
+Read-Only:
+
+- `headers` (Attributes List) Headers attached to every outbound request (values redacted). (see [below for nested schema](#nestedatt--environments--configuration--headers))
+- `method` (String) HTTP method.
+- `success_status` (String) Required success status.
+- `url` (String) Destination URL.
+
+<a id="nestedatt--environments--configuration--headers"></a>
+### Nested Schema for `environments.configuration.headers`
 
 Read-Only:
 

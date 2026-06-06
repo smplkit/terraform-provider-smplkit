@@ -23,7 +23,13 @@ resource "smplkit_audit_forwarder" "splunk_prod" {
   name           = "Splunk HEC — Production"
   description    = "Forwards audit events to the production Splunk instance."
   forwarder_type = "splunk_hec"
-  enabled        = true
+
+  # Enablement is per-environment. Deliver in production, leave staging
+  # off. An environment with no entry receives no deliveries.
+  environments = {
+    production = { enabled = true }
+    staging    = { enabled = false }
+  }
 
   # Optional JSON Logic filter — only forward events about flag changes.
   filter = jsonencode({
@@ -61,7 +67,7 @@ resource "smplkit_audit_forwarder" "splunk_prod" {
 ### Optional
 
 - `description` (String) Optional free-text description.
-- `enabled` (Boolean) Whether deliveries are attempted. Defaults to `true`.
+- `environments` (Attributes Map) Per-environment configuration keyed by environment id (e.g. `production`). A forwarder delivers events in an environment only when that environment's entry sets `enabled = true`; an environment with no entry receives no deliveries. Each entry may also carry a `configuration` override that fully replaces the base `configuration` in that environment. Every referenced environment must already exist and be managed for the account. (see [below for nested schema](#nestedatt--environments))
 - `filter` (String) Optional JSON Logic expression (as a JSON-encoded string) evaluated against each event. Events that don't match are recorded as filtered-out deliveries and not forwarded.
 - `transform` (String) Optional template applied to each event before delivery. Shape depends on `transform_type`; for `JSONATA` this is the JSONata expression string. Must be set together with `transform_type`.
 - `transform_type` (String) Engine used to evaluate `transform`. Currently only `JSONATA` is supported.
@@ -87,6 +93,37 @@ Optional:
 
 <a id="nestedatt--configuration--headers"></a>
 ### Nested Schema for `configuration.headers`
+
+Required:
+
+- `name` (String) Header name.
+- `value` (String, Sensitive) Header value (e.g. an auth token). Sensitive — stored encrypted server-side and redacted on reads.
+
+
+
+<a id="nestedatt--environments"></a>
+### Nested Schema for `environments`
+
+Optional:
+
+- `configuration` (Attributes) Optional per-environment HTTP request configuration that fully replaces the base `configuration` in this environment. Omit to inherit the base configuration. (see [below for nested schema](#nestedatt--environments--configuration))
+- `enabled` (Boolean) Whether the forwarder delivers events in this environment. Defaults to `false`.
+
+<a id="nestedatt--environments--configuration"></a>
+### Nested Schema for `environments.configuration`
+
+Required:
+
+- `url` (String) Destination URL the audit service POSTs each event to.
+
+Optional:
+
+- `headers` (Attributes List) Headers attached to every outbound request. Values are encrypted at rest server-side; reads return them as `<redacted>` so the provider keeps the planned value in state to avoid spurious diffs. (see [below for nested schema](#nestedatt--environments--configuration--headers))
+- `method` (String) HTTP method. Defaults to POST.
+- `success_status` (String) Status the destination must return for delivery to count as success. Exact code (`200`) or class (`2xx`). Defaults to `2xx`.
+
+<a id="nestedatt--environments--configuration--headers"></a>
+### Nested Schema for `environments.configuration.headers`
 
 Required:
 

@@ -97,9 +97,19 @@ func freeOneManagedEnvironmentSlot(t *testing.T) {
 		t.Skip("SMPLKIT_API_KEY not set; skipping env-slot prep")
 	}
 	cfg := smplkit.ManagementConfig{APIKey: apiKey}
-	if base := os.Getenv("SMPLKIT_API_URL"); base != "" {
-		cfg.Scheme = "http"
-		cfg.BaseDomain = "localhost"
+	// Route this side-channel client at the same backend the provider
+	// under test targets. SMPLKIT_API_URL may point at the local platform
+	// (`http://localhost`) or at a remote/prod endpoint
+	// (`https://app.smplkit.com`); parse it through the same splitAPIURL
+	// the provider uses so prod runs don't get silently pinned to
+	// localhost (which yields a spurious 502/connection error here).
+	if raw := os.Getenv("SMPLKIT_API_URL"); raw != "" {
+		scheme, base, err := splitAPIURL(raw)
+		if err != nil {
+			t.Fatalf("invalid SMPLKIT_API_URL %q: %v", raw, err)
+		}
+		cfg.Scheme = scheme
+		cfg.BaseDomain = base
 	}
 	client, err := smplkit.NewManagementClient(cfg)
 	if err != nil {
@@ -372,6 +382,11 @@ resource "smplkit_audit_forwarder" "test" {
     }
   }
 
+  # Opt this forwarder into smplkit's own platform change events on
+  # create; the update step below flips it back to false to exercise
+  # the round-trip.
+  forward_smplkit_events = true
+
   configuration = {
     url = "https://splunk.example.com:8088/services/collector/event"
     headers = [
@@ -392,14 +407,51 @@ resource "smplkit_audit_forwarder" "test" {
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("smplkit_audit_forwarder.test", "forwarder_type", "splunk_hec"),
 					resource.TestCheckResourceAttr("smplkit_audit_forwarder.test", "environments.production.enabled", "true"),
+					resource.TestCheckResourceAttr("smplkit_audit_forwarder.test", "forward_smplkit_events", "true"),
 					resource.TestCheckResourceAttr("smplkit_audit_forwarder.test", "configuration.url", "https://splunk.example.com:8088/services/collector/event"),
 					resource.TestCheckResourceAttr("smplkit_audit_forwarder.test", "configuration.headers.0.name", "Authorization"),
 				),
 			},
 			{
-				ResourceName:            "smplkit_audit_forwarder.test",
-				ImportState:             true,
-				ImportStateVerify:       true,
+				Config: testProviderConfig() + fmt.Sprintf(`
+resource "smplkit_audit_forwarder" "test" {
+  id             = %[1]q
+  name           = "Acc Forwarder"
+  forwarder_type = "splunk_hec"
+
+  environments = {
+    production = {
+      enabled = true
+    }
+  }
+
+  # Flip the platform-change-event opt-in off to confirm the attribute
+  # round-trips on update.
+  forward_smplkit_events = false
+
+  configuration = {
+    url = "https://splunk.example.com:8088/services/collector/event"
+    headers = [
+      {
+        name  = "Authorization"
+        value = "Splunk acc-test-token"
+      },
+      {
+        name  = "Content-Type"
+        value = "application/json"
+      },
+    ]
+  }
+}
+`, id),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("smplkit_audit_forwarder.test", "forward_smplkit_events", "false"),
+				),
+			},
+			{
+				ResourceName:      "smplkit_audit_forwarder.test",
+				ImportState:       true,
+				ImportStateVerify: true,
 				// header values come back redacted, so the import-verify
 				// pass would always diff against the plan value
 				ImportStateVerifyIgnore: []string{"configuration.headers"},

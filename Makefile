@@ -22,8 +22,9 @@ test: ## Run unit tests.
 	go test ./... -count=1
 
 .PHONY: testacc
-testacc: ## Run acceptance tests against the local platform (ADR-042).
-	TF_ACC=1 SMPLKIT_API_URL?=http://localhost \
+testacc: ## Run acceptance tests against the local platform (ADR-042). Override the target with SMPLKIT_API_URL.
+	: "$${SMPLKIT_API_URL:=http://localhost}"; \
+		TF_ACC=1 SMPLKIT_API_URL="$$SMPLKIT_API_URL" \
 		go test ./internal/provider/... -v -timeout 30m -count=1
 
 .PHONY: cover

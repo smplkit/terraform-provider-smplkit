@@ -10,6 +10,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/booldefault"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
@@ -59,18 +60,19 @@ type forwarderEnvOverride struct {
 }
 
 type auditForwarderResourceModel struct {
-	ID            types.String                    `tfsdk:"id"`
-	Name          types.String                    `tfsdk:"name"`
-	Description   types.String                    `tfsdk:"description"`
-	ForwarderType types.String                    `tfsdk:"forwarder_type"`
-	Environments  map[string]forwarderEnvOverride `tfsdk:"environments"`
-	Filter        types.String                    `tfsdk:"filter"`
-	Transform     types.String                    `tfsdk:"transform"`
-	TransformType types.String                    `tfsdk:"transform_type"`
-	Configuration *forwarderConfigurationModel    `tfsdk:"configuration"`
-	CreatedAt     types.String                    `tfsdk:"created_at"`
-	UpdatedAt     types.String                    `tfsdk:"updated_at"`
-	Version       types.Int64                     `tfsdk:"version"`
+	ID                   types.String                    `tfsdk:"id"`
+	Name                 types.String                    `tfsdk:"name"`
+	Description          types.String                    `tfsdk:"description"`
+	ForwarderType        types.String                    `tfsdk:"forwarder_type"`
+	Environments         map[string]forwarderEnvOverride `tfsdk:"environments"`
+	ForwardSmplkitEvents types.Bool                      `tfsdk:"forward_smplkit_events"`
+	Filter               types.String                    `tfsdk:"filter"`
+	Transform            types.String                    `tfsdk:"transform"`
+	TransformType        types.String                    `tfsdk:"transform_type"`
+	Configuration        *forwarderConfigurationModel    `tfsdk:"configuration"`
+	CreatedAt            types.String                    `tfsdk:"created_at"`
+	UpdatedAt            types.String                    `tfsdk:"updated_at"`
+	Version              types.Int64                     `tfsdk:"version"`
 }
 
 func (r *auditForwarderResource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
@@ -122,6 +124,17 @@ func (r *auditForwarderResource) Schema(_ context.Context, _ resource.SchemaRequ
 								"`configuration` in this environment. Omit to inherit the base configuration."),
 					},
 				},
+			},
+			"forward_smplkit_events": schema.BoolAttribute{
+				Optional: true,
+				Computed: true,
+				Default:  booldefault.StaticBool(false),
+				Description: "When `true`, this forwarder also receives platform change events that smplkit records " +
+					"about your own resources (flag, configuration, and similar changes). Each such event is delivered " +
+					"through every environment this forwarder is enabled in, using that environment's resolved " +
+					"configuration. Defaults to `false` — platform change events are not forwarded unless you opt in. " +
+					"Independent of the per-environment `enabled` settings, since platform change events are not tied " +
+					"to a deployment environment.",
 			},
 			"filter": schema.StringAttribute{
 				Optional: true,
@@ -314,6 +327,12 @@ func (r *auditForwarderResource) Update(ctx context.Context, req resource.Update
 	// nil map clears enablement everywhere (the base `enabled` is
 	// server-pinned false per ADR-055).
 	fwd.Environments = forwarderEnvironmentsFromModel(plan.Environments)
+	if !plan.ForwardSmplkitEvents.IsNull() && !plan.ForwardSmplkitEvents.IsUnknown() {
+		v := plan.ForwardSmplkitEvents.ValueBool()
+		fwd.ForwardSmplkitEvents = &v
+	} else {
+		fwd.ForwardSmplkitEvents = nil
+	}
 	if !plan.Filter.IsNull() && !plan.Filter.IsUnknown() && plan.Filter.ValueString() != "" {
 		parsed, err := parseJSONString(plan.Filter.ValueString())
 		if err != nil {
@@ -386,6 +405,9 @@ func buildForwarderOptions(data *auditForwarderResourceModel, diags *diag.Diagno
 	if !data.Description.IsNull() && !data.Description.IsUnknown() {
 		opts = append(opts, smplkit.WithForwarderDescription(data.Description.ValueString()))
 	}
+	if !data.ForwardSmplkitEvents.IsNull() && !data.ForwardSmplkitEvents.IsUnknown() {
+		opts = append(opts, smplkit.WithForwardSmplkitEvents(data.ForwardSmplkitEvents.ValueBool()))
+	}
 	if !data.Filter.IsNull() && !data.Filter.IsUnknown() && data.Filter.ValueString() != "" {
 		parsed, err := parseJSONString(data.Filter.ValueString())
 		if err != nil {
@@ -438,6 +460,15 @@ func applyForwarderToModel(fwd *smplkit.Forwarder, model *auditForwarderResource
 	model.Name = types.StringValue(fwd.Name)
 	model.Description = stringPointerToTypes(fwd.Description)
 	model.ForwarderType = types.StringValue(string(fwd.ForwarderType))
+
+	// forward_smplkit_events is Optional+Computed with a server-side
+	// default of false, so a nil from the API maps to the documented
+	// default rather than a null that would perturb the plan.
+	if fwd.ForwardSmplkitEvents != nil {
+		model.ForwardSmplkitEvents = types.BoolValue(*fwd.ForwardSmplkitEvents)
+	} else {
+		model.ForwardSmplkitEvents = types.BoolValue(false)
+	}
 
 	if fwd.Filter == nil {
 		model.Filter = types.StringNull()

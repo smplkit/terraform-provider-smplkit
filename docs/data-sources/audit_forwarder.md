@@ -32,6 +32,7 @@ data "smplkit_audit_forwarder" "splunk_prod" {
 - `description` (String) Optional description.
 - `environments` (Attributes Map) Per-environment configuration keyed by environment id. The forwarder delivers events in an environment only when that environment's entry is `enabled`. (see [below for nested schema](#nestedatt--environments))
 - `filter` (String) JSON Logic filter (JSON-encoded).
+- `forward_smplkit_events` (Boolean) Whether this forwarder also receives platform change events that smplkit records about your own resources (flag, configuration, and similar changes). When `true`, each such event is delivered through every environment this forwarder is enabled in. Independent of the per-environment `enabled` settings.
 - `forwarder_type` (String) Destination family.
 - `name` (String) Display name.
 - `transform` (String) Transform expression.

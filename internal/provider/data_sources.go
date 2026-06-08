@@ -408,6 +408,13 @@ func (d *auditForwarderDataSource) Schema(_ context.Context, _ datasource.Schema
 					},
 				},
 			},
+			"forward_smplkit_events": dsschema.BoolAttribute{
+				Computed: true,
+				Description: "Whether this forwarder also receives platform change events that smplkit records about " +
+					"your own resources (flag, configuration, and similar changes). When `true`, each such event is " +
+					"delivered through every environment this forwarder is enabled in. Independent of the per-environment " +
+					"`enabled` settings.",
+			},
 			"filter":         dsschema.StringAttribute{Computed: true, Description: "JSON Logic filter (JSON-encoded)."},
 			"transform":      dsschema.StringAttribute{Computed: true, Description: "Transform expression."},
 			"transform_type": dsschema.StringAttribute{Computed: true, Description: "Transform engine (currently JSONATA)."},

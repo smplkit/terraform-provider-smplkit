@@ -22,7 +22,7 @@ func NewEnvironmentResource() resource.Resource {
 }
 
 type environmentResource struct {
-	client *smplkit.ManagementClient
+	client *smplkit.SmplClient
 }
 
 type environmentResourceModel struct {
@@ -90,9 +90,9 @@ func (r *environmentResource) Configure(_ context.Context, req resource.Configur
 	if req.ProviderData == nil {
 		return
 	}
-	client, ok := req.ProviderData.(*smplkit.ManagementClient)
+	client, ok := req.ProviderData.(*smplkit.SmplClient)
 	if !ok {
-		resp.Diagnostics.AddError("Unexpected provider data type", fmt.Sprintf("Expected *smplkit.ManagementClient, got %T", req.ProviderData))
+		resp.Diagnostics.AddError("Unexpected provider data type", fmt.Sprintf("Expected *smplkit.SmplClient, got %T", req.ProviderData))
 		return
 	}
 	r.client = client
@@ -113,7 +113,7 @@ func (r *environmentResource) Create(ctx context.Context, req resource.CreateReq
 		opts = append(opts, smplkit.WithEnvironmentClassification(smplkit.EnvironmentClassification(data.Classification.ValueString())))
 	}
 
-	env := r.client.Environments().New(data.ID.ValueString(), data.Name.ValueString(), opts...)
+	env := r.client.Platform().Environments().New(data.ID.ValueString(), data.Name.ValueString(), opts...)
 	if err := env.Save(ctx); err != nil {
 		addSDKErrorDiagnostic(&resp.Diagnostics, fmt.Sprintf("creating smplkit_environment %q", data.ID.ValueString()), err)
 		return
@@ -130,7 +130,7 @@ func (r *environmentResource) Read(ctx context.Context, req resource.ReadRequest
 		return
 	}
 
-	env, err := r.client.Environments().Get(ctx, data.ID.ValueString())
+	env, err := r.client.Platform().Environments().Get(ctx, data.ID.ValueString())
 	if err != nil {
 		if isNotFound(err) {
 			resp.State.RemoveResource(ctx)
@@ -152,7 +152,7 @@ func (r *environmentResource) Update(ctx context.Context, req resource.UpdateReq
 		return
 	}
 
-	env, err := r.client.Environments().Get(ctx, state.ID.ValueString())
+	env, err := r.client.Platform().Environments().Get(ctx, state.ID.ValueString())
 	if err != nil {
 		addSDKErrorDiagnostic(&resp.Diagnostics, fmt.Sprintf("reading smplkit_environment %q before update", state.ID.ValueString()), err)
 		return
@@ -182,7 +182,7 @@ func (r *environmentResource) Delete(ctx context.Context, req resource.DeleteReq
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	if err := r.client.Environments().Delete(ctx, data.ID.ValueString()); err != nil {
+	if err := r.client.Platform().Environments().Delete(ctx, data.ID.ValueString()); err != nil {
 		if isNotFound(err) {
 			return
 		}

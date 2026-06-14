@@ -25,7 +25,7 @@ const localPlatformURL = "http://localhost"
 
 // testAccProtoV6ProviderFactories wires our provider into the testing
 // framework's harness. The factory is invoked once per test; the
-// underlying ManagementClient picks up SMPLKIT_API_KEY from the env.
+// underlying SmplClient picks up SMPLKIT_API_KEY from the env.
 var testAccProtoV6ProviderFactories = map[string]func() (tfprotov6.ProviderServer, error){
 	"smplkit": providerserver.NewProtocol6WithError(New("acc")()),
 }
@@ -96,7 +96,7 @@ func freeOneManagedEnvironmentSlot(t *testing.T) {
 	if apiKey == "" {
 		t.Skip("SMPLKIT_API_KEY not set; skipping env-slot prep")
 	}
-	cfg := smplkit.ManagementConfig{APIKey: apiKey}
+	cfg := smplkit.Config{APIKey: apiKey}
 	// Route this side-channel client at the same backend the provider
 	// under test targets. SMPLKIT_API_URL may point at the local platform
 	// (`http://localhost`) or at a remote/prod endpoint
@@ -111,11 +111,11 @@ func freeOneManagedEnvironmentSlot(t *testing.T) {
 		cfg.Scheme = scheme
 		cfg.BaseDomain = base
 	}
-	client, err := smplkit.NewManagementClient(cfg)
+	client, err := smplkit.NewClient(cfg)
 	if err != nil {
 		t.Fatalf("management client: %v", err)
 	}
-	if err := client.Environments().Delete(context.Background(), "development"); err != nil {
+	if err := client.Platform().Environments().Delete(context.Background(), "development"); err != nil {
 		var nf *smplkit.NotFoundError
 		if !errors.As(err, &nf) {
 			t.Fatalf("failed to free slot by deleting `development`: %v", err)

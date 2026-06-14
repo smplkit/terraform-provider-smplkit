@@ -20,7 +20,7 @@ func NewServiceResource() resource.Resource {
 }
 
 type serviceResource struct {
-	client *smplkit.ManagementClient
+	client *smplkit.SmplClient
 }
 
 type serviceResourceModel struct {
@@ -67,11 +67,11 @@ func (r *serviceResource) Configure(_ context.Context, req resource.ConfigureReq
 	if req.ProviderData == nil {
 		return
 	}
-	client, ok := req.ProviderData.(*smplkit.ManagementClient)
+	client, ok := req.ProviderData.(*smplkit.SmplClient)
 	if !ok {
 		resp.Diagnostics.AddError(
 			"Unexpected provider data type",
-			fmt.Sprintf("Expected *smplkit.ManagementClient, got %T", req.ProviderData),
+			fmt.Sprintf("Expected *smplkit.SmplClient, got %T", req.ProviderData),
 		)
 		return
 	}
@@ -85,7 +85,7 @@ func (r *serviceResource) Create(ctx context.Context, req resource.CreateRequest
 		return
 	}
 
-	svc := r.client.Services().New(data.ID.ValueString(), data.Name.ValueString())
+	svc := r.client.Platform().Services().New(data.ID.ValueString(), data.Name.ValueString())
 	if err := svc.Save(ctx); err != nil {
 		addSDKErrorDiagnostic(&resp.Diagnostics, fmt.Sprintf("creating smplkit_service %q", data.ID.ValueString()), err)
 		return
@@ -102,7 +102,7 @@ func (r *serviceResource) Read(ctx context.Context, req resource.ReadRequest, re
 		return
 	}
 
-	svc, err := r.client.Services().Get(ctx, data.ID.ValueString())
+	svc, err := r.client.Platform().Services().Get(ctx, data.ID.ValueString())
 	if err != nil {
 		if isNotFound(err) {
 			resp.State.RemoveResource(ctx)
@@ -124,7 +124,7 @@ func (r *serviceResource) Update(ctx context.Context, req resource.UpdateRequest
 		return
 	}
 
-	svc, err := r.client.Services().Get(ctx, state.ID.ValueString())
+	svc, err := r.client.Platform().Services().Get(ctx, state.ID.ValueString())
 	if err != nil {
 		addSDKErrorDiagnostic(&resp.Diagnostics, fmt.Sprintf("reading smplkit_service %q before update", state.ID.ValueString()), err)
 		return
@@ -145,7 +145,7 @@ func (r *serviceResource) Delete(ctx context.Context, req resource.DeleteRequest
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	if err := r.client.Services().Delete(ctx, data.ID.ValueString()); err != nil {
+	if err := r.client.Platform().Services().Delete(ctx, data.ID.ValueString()); err != nil {
 		if isNotFound(err) {
 			return
 		}

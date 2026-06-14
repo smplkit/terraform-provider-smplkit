@@ -21,7 +21,7 @@ func NewConfigurationResource() resource.Resource {
 }
 
 type configurationResource struct {
-	client *smplkit.ManagementClient
+	client *smplkit.SmplClient
 }
 
 type configurationResourceModel struct {
@@ -97,9 +97,9 @@ func (r *configurationResource) Configure(_ context.Context, req resource.Config
 	if req.ProviderData == nil {
 		return
 	}
-	client, ok := req.ProviderData.(*smplkit.ManagementClient)
+	client, ok := req.ProviderData.(*smplkit.SmplClient)
 	if !ok {
-		resp.Diagnostics.AddError("Unexpected provider data type", fmt.Sprintf("Expected *smplkit.ManagementClient, got %T", req.ProviderData))
+		resp.Diagnostics.AddError("Unexpected provider data type", fmt.Sprintf("Expected *smplkit.SmplClient, got %T", req.ProviderData))
 		return
 	}
 	r.client = client

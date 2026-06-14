@@ -24,7 +24,7 @@ func NewServiceDataSource() datasource.DataSource {
 }
 
 type serviceDataSource struct {
-	client *smplkit.ManagementClient
+	client *smplkit.SmplClient
 }
 
 func (d *serviceDataSource) Metadata(_ context.Context, req datasource.MetadataRequest, resp *datasource.MetadataResponse) {
@@ -47,9 +47,9 @@ func (d *serviceDataSource) Configure(_ context.Context, req datasource.Configur
 	if req.ProviderData == nil {
 		return
 	}
-	c, ok := req.ProviderData.(*smplkit.ManagementClient)
+	c, ok := req.ProviderData.(*smplkit.SmplClient)
 	if !ok {
-		resp.Diagnostics.AddError("Unexpected provider data type", fmt.Sprintf("Expected *smplkit.ManagementClient, got %T", req.ProviderData))
+		resp.Diagnostics.AddError("Unexpected provider data type", fmt.Sprintf("Expected *smplkit.SmplClient, got %T", req.ProviderData))
 		return
 	}
 	d.client = c
@@ -61,7 +61,7 @@ func (d *serviceDataSource) Read(ctx context.Context, req datasource.ReadRequest
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	svc, err := d.client.Services().Get(ctx, data.ID.ValueString())
+	svc, err := d.client.Platform().Services().Get(ctx, data.ID.ValueString())
 	if err != nil {
 		addSDKErrorDiagnostic(&resp.Diagnostics, fmt.Sprintf("reading smplkit_service data source %q", data.ID.ValueString()), err)
 		return
@@ -78,7 +78,7 @@ func NewEnvironmentDataSource() datasource.DataSource {
 }
 
 type environmentDataSource struct {
-	client *smplkit.ManagementClient
+	client *smplkit.SmplClient
 }
 
 func (d *environmentDataSource) Metadata(_ context.Context, req datasource.MetadataRequest, resp *datasource.MetadataResponse) {
@@ -103,9 +103,9 @@ func (d *environmentDataSource) Configure(_ context.Context, req datasource.Conf
 	if req.ProviderData == nil {
 		return
 	}
-	c, ok := req.ProviderData.(*smplkit.ManagementClient)
+	c, ok := req.ProviderData.(*smplkit.SmplClient)
 	if !ok {
-		resp.Diagnostics.AddError("Unexpected provider data type", fmt.Sprintf("Expected *smplkit.ManagementClient, got %T", req.ProviderData))
+		resp.Diagnostics.AddError("Unexpected provider data type", fmt.Sprintf("Expected *smplkit.SmplClient, got %T", req.ProviderData))
 		return
 	}
 	d.client = c
@@ -117,7 +117,7 @@ func (d *environmentDataSource) Read(ctx context.Context, req datasource.ReadReq
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	env, err := d.client.Environments().Get(ctx, data.ID.ValueString())
+	env, err := d.client.Platform().Environments().Get(ctx, data.ID.ValueString())
 	if err != nil {
 		addSDKErrorDiagnostic(&resp.Diagnostics, fmt.Sprintf("reading smplkit_environment data source %q", data.ID.ValueString()), err)
 		return
@@ -134,7 +134,7 @@ func NewLogGroupDataSource() datasource.DataSource {
 }
 
 type logGroupDataSource struct {
-	client *smplkit.ManagementClient
+	client *smplkit.SmplClient
 }
 
 func (d *logGroupDataSource) Metadata(_ context.Context, req datasource.MetadataRequest, resp *datasource.MetadataResponse) {
@@ -164,9 +164,9 @@ func (d *logGroupDataSource) Configure(_ context.Context, req datasource.Configu
 	if req.ProviderData == nil {
 		return
 	}
-	c, ok := req.ProviderData.(*smplkit.ManagementClient)
+	c, ok := req.ProviderData.(*smplkit.SmplClient)
 	if !ok {
-		resp.Diagnostics.AddError("Unexpected provider data type", fmt.Sprintf("Expected *smplkit.ManagementClient, got %T", req.ProviderData))
+		resp.Diagnostics.AddError("Unexpected provider data type", fmt.Sprintf("Expected *smplkit.SmplClient, got %T", req.ProviderData))
 		return
 	}
 	d.client = c
@@ -178,7 +178,7 @@ func (d *logGroupDataSource) Read(ctx context.Context, req datasource.ReadReques
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	group, err := d.client.LogGroups().Get(ctx, data.ID.ValueString())
+	group, err := d.client.Logging().LogGroups().Get(ctx, data.ID.ValueString())
 	if err != nil {
 		addSDKErrorDiagnostic(&resp.Diagnostics, fmt.Sprintf("reading smplkit_log_group data source %q", data.ID.ValueString()), err)
 		return
@@ -195,7 +195,7 @@ func NewConfigurationDataSource() datasource.DataSource {
 }
 
 type configurationDataSource struct {
-	client *smplkit.ManagementClient
+	client *smplkit.SmplClient
 }
 
 func (d *configurationDataSource) Metadata(_ context.Context, req datasource.MetadataRequest, resp *datasource.MetadataResponse) {
@@ -230,9 +230,9 @@ func (d *configurationDataSource) Configure(_ context.Context, req datasource.Co
 	if req.ProviderData == nil {
 		return
 	}
-	c, ok := req.ProviderData.(*smplkit.ManagementClient)
+	c, ok := req.ProviderData.(*smplkit.SmplClient)
 	if !ok {
-		resp.Diagnostics.AddError("Unexpected provider data type", fmt.Sprintf("Expected *smplkit.ManagementClient, got %T", req.ProviderData))
+		resp.Diagnostics.AddError("Unexpected provider data type", fmt.Sprintf("Expected *smplkit.SmplClient, got %T", req.ProviderData))
 		return
 	}
 	d.client = c
@@ -264,7 +264,7 @@ func NewFlagDataSource() datasource.DataSource {
 }
 
 type flagDataSource struct {
-	client *smplkit.ManagementClient
+	client *smplkit.SmplClient
 }
 
 func (d *flagDataSource) Metadata(_ context.Context, req datasource.MetadataRequest, resp *datasource.MetadataResponse) {
@@ -322,9 +322,9 @@ func (d *flagDataSource) Configure(_ context.Context, req datasource.ConfigureRe
 	if req.ProviderData == nil {
 		return
 	}
-	c, ok := req.ProviderData.(*smplkit.ManagementClient)
+	c, ok := req.ProviderData.(*smplkit.SmplClient)
 	if !ok {
-		resp.Diagnostics.AddError("Unexpected provider data type", fmt.Sprintf("Expected *smplkit.ManagementClient, got %T", req.ProviderData))
+		resp.Diagnostics.AddError("Unexpected provider data type", fmt.Sprintf("Expected *smplkit.SmplClient, got %T", req.ProviderData))
 		return
 	}
 	d.client = c
@@ -381,7 +381,7 @@ func NewAuditForwarderDataSource() datasource.DataSource {
 }
 
 type auditForwarderDataSource struct {
-	client *smplkit.ManagementClient
+	client *smplkit.SmplClient
 }
 
 func (d *auditForwarderDataSource) Metadata(_ context.Context, req datasource.MetadataRequest, resp *datasource.MetadataResponse) {
@@ -430,9 +430,9 @@ func (d *auditForwarderDataSource) Configure(_ context.Context, req datasource.C
 	if req.ProviderData == nil {
 		return
 	}
-	c, ok := req.ProviderData.(*smplkit.ManagementClient)
+	c, ok := req.ProviderData.(*smplkit.SmplClient)
 	if !ok {
-		resp.Diagnostics.AddError("Unexpected provider data type", fmt.Sprintf("Expected *smplkit.ManagementClient, got %T", req.ProviderData))
+		resp.Diagnostics.AddError("Unexpected provider data type", fmt.Sprintf("Expected *smplkit.SmplClient, got %T", req.ProviderData))
 		return
 	}
 	d.client = c

@@ -89,7 +89,7 @@ func (p *SmplkitProvider) Configure(ctx context.Context, req provider.ConfigureR
 		return
 	}
 
-	cfg := smplkit.ManagementConfig{APIKey: apiKey}
+	cfg := smplkit.Config{APIKey: apiKey}
 	if !data.APIURL.IsNull() && !data.APIURL.IsUnknown() {
 		raw := strings.TrimSpace(data.APIURL.ValueString())
 		if raw != "" {
@@ -107,7 +107,7 @@ func (p *SmplkitProvider) Configure(ctx context.Context, req provider.ConfigureR
 		}
 	}
 
-	client, err := smplkit.NewManagementClient(cfg)
+	client, err := smplkit.NewClient(cfg)
 	if err != nil {
 		resp.Diagnostics.AddError(
 			"Unable to construct smplkit management client",

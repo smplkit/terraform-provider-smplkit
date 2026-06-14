@@ -29,7 +29,7 @@ func NewFlagResource() resource.Resource {
 }
 
 type flagResource struct {
-	client *smplkit.ManagementClient
+	client *smplkit.SmplClient
 }
 
 // flagEnvOverride is the nested object inside the `environments` map.
@@ -191,9 +191,9 @@ func (r *flagResource) Configure(_ context.Context, req resource.ConfigureReques
 	if req.ProviderData == nil {
 		return
 	}
-	client, ok := req.ProviderData.(*smplkit.ManagementClient)
+	client, ok := req.ProviderData.(*smplkit.SmplClient)
 	if !ok {
-		resp.Diagnostics.AddError("Unexpected provider data type", fmt.Sprintf("Expected *smplkit.ManagementClient, got %T", req.ProviderData))
+		resp.Diagnostics.AddError("Unexpected provider data type", fmt.Sprintf("Expected *smplkit.SmplClient, got %T", req.ProviderData))
 		return
 	}
 	r.client = client

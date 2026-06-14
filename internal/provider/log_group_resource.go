@@ -27,7 +27,7 @@ func NewLogGroupResource() resource.Resource {
 }
 
 type logGroupResource struct {
-	client *smplkit.ManagementClient
+	client *smplkit.SmplClient
 }
 
 type logGroupResourceModel struct {
@@ -98,9 +98,9 @@ func (r *logGroupResource) Configure(_ context.Context, req resource.ConfigureRe
 	if req.ProviderData == nil {
 		return
 	}
-	client, ok := req.ProviderData.(*smplkit.ManagementClient)
+	client, ok := req.ProviderData.(*smplkit.SmplClient)
 	if !ok {
-		resp.Diagnostics.AddError("Unexpected provider data type", fmt.Sprintf("Expected *smplkit.ManagementClient, got %T", req.ProviderData))
+		resp.Diagnostics.AddError("Unexpected provider data type", fmt.Sprintf("Expected *smplkit.SmplClient, got %T", req.ProviderData))
 		return
 	}
 	r.client = client
@@ -121,9 +121,9 @@ func (r *logGroupResource) Create(ctx context.Context, req resource.CreateReques
 		opts = append(opts, smplkit.WithLogGroupParent(data.ParentGroup.ValueString()))
 	}
 
-	group := r.client.LogGroups().New(data.ID.ValueString(), opts...)
+	group := r.client.Logging().LogGroups().New(data.ID.ValueString(), opts...)
 	if !data.Level.IsNull() && !data.Level.IsUnknown() && data.Level.ValueString() != "" {
-		group.SetLevel(smplkit.LogLevel(data.Level.ValueString()))
+		group.SetLevel(smplkit.LogLevel(data.Level.ValueString()), "")
 	}
 	for env, level := range data.Environments {
 		if err := validateLogLevel(level); err != nil {
@@ -151,7 +151,7 @@ func (r *logGroupResource) Read(ctx context.Context, req resource.ReadRequest, r
 		return
 	}
 
-	group, err := r.client.LogGroups().Get(ctx, data.ID.ValueString())
+	group, err := r.client.Logging().LogGroups().Get(ctx, data.ID.ValueString())
 	if err != nil {
 		if isNotFound(err) {
 			resp.State.RemoveResource(ctx)
@@ -173,7 +173,7 @@ func (r *logGroupResource) Update(ctx context.Context, req resource.UpdateReques
 		return
 	}
 
-	group, err := r.client.LogGroups().Get(ctx, state.ID.ValueString())
+	group, err := r.client.Logging().LogGroups().Get(ctx, state.ID.ValueString())
 	if err != nil {
 		addSDKErrorDiagnostic(&resp.Diagnostics, fmt.Sprintf("reading smplkit_log_group %q before update", state.ID.ValueString()), err)
 		return
@@ -182,9 +182,9 @@ func (r *logGroupResource) Update(ctx context.Context, req resource.UpdateReques
 		group.Name = plan.Name.ValueString()
 	}
 	if !plan.Level.IsNull() && !plan.Level.IsUnknown() && plan.Level.ValueString() != "" {
-		group.SetLevel(smplkit.LogLevel(plan.Level.ValueString()))
+		group.SetLevel(smplkit.LogLevel(plan.Level.ValueString()), "")
 	} else {
-		group.ClearLevel()
+		group.ClearLevel("")
 	}
 	if !plan.ParentGroup.IsNull() && !plan.ParentGroup.IsUnknown() && plan.ParentGroup.ValueString() != "" {
 		s := plan.ParentGroup.ValueString()
@@ -218,7 +218,7 @@ func (r *logGroupResource) Delete(ctx context.Context, req resource.DeleteReques
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	if err := r.client.LogGroups().Delete(ctx, data.ID.ValueString()); err != nil {
+	if err := r.client.Logging().LogGroups().Delete(ctx, data.ID.ValueString()); err != nil {
 		if isNotFound(err) {
 			return
 		}

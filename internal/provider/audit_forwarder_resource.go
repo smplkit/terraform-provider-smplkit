@@ -33,7 +33,7 @@ func NewAuditForwarderResource() resource.Resource {
 }
 
 type auditForwarderResource struct {
-	client *smplkit.ManagementClient
+	client *smplkit.SmplClient
 }
 
 type forwarderConfigurationModel struct {
@@ -227,9 +227,9 @@ func (r *auditForwarderResource) Configure(_ context.Context, req resource.Confi
 	if req.ProviderData == nil {
 		return
 	}
-	client, ok := req.ProviderData.(*smplkit.ManagementClient)
+	client, ok := req.ProviderData.(*smplkit.SmplClient)
 	if !ok {
-		resp.Diagnostics.AddError("Unexpected provider data type", fmt.Sprintf("Expected *smplkit.ManagementClient, got %T", req.ProviderData))
+		resp.Diagnostics.AddError("Unexpected provider data type", fmt.Sprintf("Expected *smplkit.SmplClient, got %T", req.ProviderData))
 		return
 	}
 	r.client = client

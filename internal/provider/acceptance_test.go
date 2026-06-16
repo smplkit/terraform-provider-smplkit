@@ -460,6 +460,99 @@ resource "smplkit_audit_forwarder" "test" {
 	})
 }
 
+// ─── smplkit_job ───────────────────────────────────────────────────────────
+
+func TestAccJobResource_basicAndUpdate(t *testing.T) {
+	id := fmt.Sprintf("tfacc-job-%d", time.Now().UnixNano())
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				// Create a paused (enabled=false) recurring job. The cron is
+				// intentionally rare (Jan 1) so the scheduler won't fire it
+				// and shift next_run_at mid-test.
+				Config: testProviderConfig() + fmt.Sprintf(`
+resource "smplkit_job" "test" {
+  id          = %[1]q
+  name        = "Acc Job"
+  description = "Acceptance job"
+  enabled     = false
+  schedule    = "0 0 1 1 *"
+
+  configuration = {
+    url     = "https://example.com/run"
+    method  = "POST"
+    body    = "{\"scope\":\"all\"}"
+    timeout = 45
+    headers = [
+      {
+        name  = "Authorization"
+        value = "Bearer acc-secret"
+      },
+    ]
+  }
+}
+`, id),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("smplkit_job.test", "id", id),
+					resource.TestCheckResourceAttr("smplkit_job.test", "enabled", "false"),
+					resource.TestCheckResourceAttr("smplkit_job.test", "type", "http"),
+					resource.TestCheckResourceAttr("smplkit_job.test", "concurrency_policy", "ALLOW"),
+					resource.TestCheckResourceAttr("smplkit_job.test", "schedule", "0 0 1 1 *"),
+					resource.TestCheckResourceAttr("smplkit_job.test", "configuration.method", "POST"),
+					resource.TestCheckResourceAttr("smplkit_job.test", "configuration.timeout", "45"),
+					// Server-applied defaults surface through the model.
+					resource.TestCheckResourceAttr("smplkit_job.test", "configuration.success_status", "2xx"),
+					resource.TestCheckResourceAttr("smplkit_job.test", "configuration.tls_verify", "true"),
+					// Job headers round-trip plaintext (unlike forwarders).
+					resource.TestCheckResourceAttr("smplkit_job.test", "configuration.headers.0.value", "Bearer acc-secret"),
+					resource.TestCheckResourceAttrSet("smplkit_job.test", "created_at"),
+					resource.TestCheckResourceAttrSet("smplkit_job.test", "version"),
+				),
+			},
+			{
+				// Update: enable it, change name + schedule, rotate the header.
+				Config: testProviderConfig() + fmt.Sprintf(`
+resource "smplkit_job" "test" {
+  id          = %[1]q
+  name        = "Acc Job v2"
+  description = "Acceptance job"
+  enabled     = true
+  schedule    = "*/30 * * * *"
+
+  configuration = {
+    url     = "https://example.com/run"
+    method  = "POST"
+    body    = "{\"scope\":\"all\"}"
+    timeout = 45
+    headers = [
+      {
+        name  = "Authorization"
+        value = "Bearer acc-rotated"
+      },
+    ]
+  }
+}
+`, id),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("smplkit_job.test", "name", "Acc Job v2"),
+					resource.TestCheckResourceAttr("smplkit_job.test", "enabled", "true"),
+					resource.TestCheckResourceAttr("smplkit_job.test", "schedule", "*/30 * * * *"),
+					resource.TestCheckResourceAttr("smplkit_job.test", "configuration.headers.0.value", "Bearer acc-rotated"),
+				),
+			},
+			{
+				// Headers round-trip plaintext, so a full import-verify works
+				// without ignoring any attribute.
+				ResourceName:      "smplkit_job.test",
+				ImportState:       true,
+				ImportStateVerify: true,
+			},
+		},
+	})
+}
+
 // testProviderConfig returns a small Terraform block that pins the
 // provider to whatever SMPLKIT_API_URL the test harness picked. The
 // acceptance harness passes SMPLKIT_API_KEY through the environment, so

@@ -452,3 +452,87 @@ func (d *auditForwarderDataSource) Read(ctx context.Context, req datasource.Read
 	applyForwarderToModel(fwd, &data)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
+
+// ───── smplkit_job ─────────────────────────────────────────────────────────
+
+// NewJobDataSource returns the read-only data source for scheduled jobs.
+func NewJobDataSource() datasource.DataSource {
+	return &jobDataSource{}
+}
+
+type jobDataSource struct {
+	client *smplkit.SmplClient
+}
+
+func (d *jobDataSource) Metadata(_ context.Context, req datasource.MetadataRequest, resp *datasource.MetadataResponse) {
+	resp.TypeName = req.ProviderTypeName + "_job"
+}
+
+func (d *jobDataSource) Schema(_ context.Context, _ datasource.SchemaRequest, resp *datasource.SchemaResponse) {
+	resp.Schema = dsschema.Schema{
+		Description: "Read a smplkit scheduled job by id. Jobs are account-global (not environment-scoped).",
+		Attributes: map[string]dsschema.Attribute{
+			"id":                 dsschema.StringAttribute{Required: true, Description: "The job key."},
+			"name":               dsschema.StringAttribute{Computed: true, Description: "Display name."},
+			"description":        dsschema.StringAttribute{Computed: true, Description: "Optional description."},
+			"enabled":            dsschema.BoolAttribute{Computed: true, Description: "Whether the job schedules runs."},
+			"type":               dsschema.StringAttribute{Computed: true, Description: "Job type (currently always `http`)."},
+			"schedule":           dsschema.StringAttribute{Computed: true, Description: "Cron expression, ISO-8601 datetime, or `now`."},
+			"concurrency_policy": dsschema.StringAttribute{Computed: true, Description: "How overlapping runs are handled (currently always `ALLOW`)."},
+			"configuration": dsschema.SingleNestedAttribute{
+				Computed:    true,
+				Description: "The HTTP request the job performs each time it fires.",
+				Attributes: map[string]dsschema.Attribute{
+					"url":            dsschema.StringAttribute{Computed: true, Description: "Destination URL."},
+					"method":         dsschema.StringAttribute{Computed: true, Description: "HTTP method."},
+					"body":           dsschema.StringAttribute{Computed: true, Description: "Request body sent on each run."},
+					"success_status": dsschema.StringAttribute{Computed: true, Description: "Status that counts as success."},
+					"timeout":        dsschema.Int64Attribute{Computed: true, Description: "Per-run timeout in seconds."},
+					"tls_verify":     dsschema.BoolAttribute{Computed: true, Description: "Whether the destination's TLS chain is verified."},
+					"ca_cert":        dsschema.StringAttribute{Computed: true, Description: "Optional additional trusted PEM certificate."},
+					"headers": dsschema.ListNestedAttribute{
+						Computed:    true,
+						Description: "Headers attached to every run's request.",
+						NestedObject: dsschema.NestedAttributeObject{
+							Attributes: map[string]dsschema.Attribute{
+								"name":  dsschema.StringAttribute{Computed: true, Description: "Header name."},
+								"value": dsschema.StringAttribute{Computed: true, Sensitive: true, Description: "Header value."},
+							},
+						},
+					},
+				},
+			},
+			"next_run_at": dsschema.StringAttribute{Computed: true, Description: "RFC3339 timestamp of the next scheduled fire time."},
+			"created_at":  dsschema.StringAttribute{Computed: true, Description: "RFC3339 creation timestamp."},
+			"updated_at":  dsschema.StringAttribute{Computed: true, Description: "RFC3339 last-modified timestamp."},
+			"version":     dsschema.Int64Attribute{Computed: true, Description: "Monotonic version counter."},
+		},
+	}
+}
+
+func (d *jobDataSource) Configure(_ context.Context, req datasource.ConfigureRequest, resp *datasource.ConfigureResponse) {
+	if req.ProviderData == nil {
+		return
+	}
+	c, ok := req.ProviderData.(*smplkit.SmplClient)
+	if !ok {
+		resp.Diagnostics.AddError("Unexpected provider data type", fmt.Sprintf("Expected *smplkit.SmplClient, got %T", req.ProviderData))
+		return
+	}
+	d.client = c
+}
+
+func (d *jobDataSource) Read(ctx context.Context, req datasource.ReadRequest, resp *datasource.ReadResponse) {
+	var data jobResourceModel
+	resp.Diagnostics.Append(req.Config.Get(ctx, &data)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	job, err := d.client.Jobs().Get(ctx, data.ID.ValueString())
+	if err != nil {
+		addSDKErrorDiagnostic(&resp.Diagnostics, fmt.Sprintf("reading smplkit_job data source %q", data.ID.ValueString()), err)
+		return
+	}
+	applyJobToModel(job, &data)
+	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
+}

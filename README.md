@@ -2,7 +2,7 @@
 
 The official Terraform provider for [smplkit](https://smplkit.com). Manage
 configurations, feature flags, audit forwarders, log groups, environments,
-and services with Terraform.
+services, and scheduled jobs with Terraform.
 
 The provider is a thin wrapper over the public [Go SDK](https://github.com/smplkit/go-sdk)'s
 **management client** — pure CRUD over the documented public API, no

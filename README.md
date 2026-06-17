@@ -46,9 +46,7 @@ the source.
 | `examples/` | Per-resource and per-data-source HCL examples used by `tfplugindocs`. |
 | `templates/` | `tfplugindocs` templates (currently just the provider overview page). |
 | `docs/` | Generated docs the Terraform Registry ingests — kept in sync via CI. |
-| `ci/` | Docker-compose + Caddyfile + DB init for the acceptance-test platform stack. |
-| `scripts/wait_for_platform.sh` | Helper used by the acceptance workflow to poll `/api/liveness` per service through Caddy. |
-| `.github/workflows/` | `ci.yml` (build/lint/test/docs check), `release.yml` (semantic-release + GoReleaser), `acceptance.yml` (TF_ACC suite against a CI-booted local platform). |
+| `.github/workflows/` | `ci.yml` (build/lint/test/docs check), `release.yml` (semantic-release + GoReleaser). |
 
 ## Development
 

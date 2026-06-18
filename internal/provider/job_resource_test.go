@@ -2,6 +2,7 @@ package provider
 
 import (
 	"testing"
+	"time"
 
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	smplkit "github.com/smplkit/go-sdk/v3"
@@ -185,18 +186,25 @@ func TestJobEnvironmentsFromModel(t *testing.T) {
 	envs := jobEnvironmentsFromModel(map[string]jobEnvOverride{
 		"production": {
 			Enabled:       types.BoolValue(true),
+			Schedule:      types.StringValue("*/15 * * * *"),
 			Configuration: &jobConfigurationModel{URL: types.StringValue("https://prod.test")},
 		},
-		"staging": {Enabled: types.BoolValue(false)},
+		"staging": {Enabled: types.BoolValue(false), Schedule: types.StringNull()},
 	})
 	if !envs["production"].Enabled {
 		t.Errorf("production should be enabled: %+v", envs)
+	}
+	if envs["production"].Schedule != "*/15 * * * *" {
+		t.Errorf("production per-env schedule override not converted: %q", envs["production"].Schedule)
 	}
 	if cfg := envs["production"].Configuration; cfg == nil || cfg.URL != "https://prod.test" {
 		t.Errorf("production config override not converted: %+v", cfg)
 	}
 	if envs["staging"].Enabled || envs["staging"].Configuration != nil {
 		t.Errorf("staging should be disabled with no override: %+v", envs["staging"])
+	}
+	if envs["staging"].Schedule != "" {
+		t.Errorf("staging null schedule should convert to empty (inherit base): %q", envs["staging"].Schedule)
 	}
 	if jobEnvironmentsFromModel(nil) != nil {
 		t.Error("nil model map should convert to nil")
@@ -207,6 +215,7 @@ func TestApplyJobToModel(t *testing.T) {
 	desc := "d"
 	ver := 3
 	recurring := true
+	nextRun := time.Date(2026, 7, 1, 2, 0, 0, 0, time.UTC)
 	job := &smplkit.Job{
 		ID:                "nightly",
 		Name:              "Nightly",
@@ -217,7 +226,13 @@ func TestApplyJobToModel(t *testing.T) {
 		Schedule:          "0 2 * * *",
 		ConcurrencyPolicy: "ALLOW",
 		Environments: map[string]smplkit.JobEnvironment{
-			"production": {Enabled: true, Configuration: &smplkit.HttpConfig{URL: "https://prod.test"}},
+			"production": {
+				Enabled:       true,
+				Schedule:      "*/15 * * * *",
+				Configuration: &smplkit.HttpConfig{URL: "https://prod.test"},
+				NextRunAt:     &nextRun,
+			},
+			"staging": {Enabled: false},
 		},
 		Configuration: smplkit.HttpConfig{URL: "https://x.test", Method: smplkit.JobHttpMethodPost},
 		Version:       &ver,
@@ -239,6 +254,24 @@ func TestApplyJobToModel(t *testing.T) {
 	}
 	if prod.Configuration == nil || prod.Configuration.URL.ValueString() != "https://prod.test" {
 		t.Errorf("production config override not projected: %+v", prod.Configuration)
+	}
+	if prod.Schedule.ValueString() != "*/15 * * * *" {
+		t.Errorf("production per-env schedule not projected: %q", prod.Schedule.ValueString())
+	}
+	if prod.NextRunAt.ValueString() != "2026-07-01T02:00:00Z" {
+		t.Errorf("production per-env next_run_at not projected: %q", prod.NextRunAt.ValueString())
+	}
+	// An environment with no per-env schedule / next-run must project to null,
+	// not an empty string, so it round-trips cleanly against an omitted config.
+	stg, ok := m.Environments["staging"]
+	if !ok {
+		t.Fatalf("staging environment not projected: %+v", m.Environments)
+	}
+	if !stg.Schedule.IsNull() {
+		t.Errorf("staging schedule should be null when unset, got %q", stg.Schedule.ValueString())
+	}
+	if !stg.NextRunAt.IsNull() {
+		t.Errorf("staging next_run_at should be null when unset, got %q", stg.NextRunAt.ValueString())
 	}
 	if m.Version.ValueInt64() != 3 {
 		t.Errorf("version: %d", m.Version.ValueInt64())

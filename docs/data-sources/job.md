@@ -17,8 +17,10 @@ data "smplkit_job" "nightly_cache_warm" {
   id = "nightly-cache-warm"
 }
 
-output "next_run_at" {
-  value = data.smplkit_job.nightly_cache_warm.next_run_at
+# next_run_at is now per-environment: each entry in the environments map
+# carries the next scheduled fire time for that environment.
+output "production_next_run_at" {
+  value = data.smplkit_job.nightly_cache_warm.environments["production"].next_run_at
 }
 ```
 
@@ -38,7 +40,6 @@ output "next_run_at" {
 - `enabled` (Boolean) Read-only roll-up: `true` when the job is enabled in at least one environment.
 - `environments` (Attributes Map) Per-environment overrides keyed by environment id. The job runs in an environment only when that environment's entry is `enabled`. (see [below for nested schema](#nestedatt--environments))
 - `name` (String) Display name.
-- `next_run_at` (String) RFC3339 timestamp of the next scheduled fire time.
 - `recurring` (Boolean) Whether the job runs on a recurring (cron) schedule, as opposed to a one-off datetime / `now`.
 - `schedule` (String) Cron expression, ISO-8601 datetime, or `now`.
 - `type` (String) Job type (currently always `http`).
@@ -76,6 +77,8 @@ Read-Only:
 
 - `configuration` (Attributes) Per-environment HTTP request configuration override. (see [below for nested schema](#nestedatt--environments--configuration))
 - `enabled` (Boolean) Whether the job runs in this environment.
+- `next_run_at` (String) RFC3339 timestamp of the next scheduled fire time in this environment.
+- `schedule` (String) Per-environment cron override, or null when the environment inherits the job's base schedule.
 
 <a id="nestedatt--environments--configuration"></a>
 ### Nested Schema for `environments.configuration`

@@ -516,12 +516,13 @@ func (d *jobDataSource) Schema(_ context.Context, _ datasource.SchemaRequest, re
 				NestedObject: dsschema.NestedAttributeObject{
 					Attributes: map[string]dsschema.Attribute{
 						"enabled":       dsschema.BoolAttribute{Computed: true, Description: "Whether the job runs in this environment."},
+						"schedule":      dsschema.StringAttribute{Computed: true, Description: "Per-environment cron override, or null when the environment inherits the job's base schedule."},
 						"configuration": jobConfigurationDataSourceAttribute("Per-environment HTTP request configuration override."),
+						"next_run_at":   dsschema.StringAttribute{Computed: true, Description: "RFC3339 timestamp of the next scheduled fire time in this environment."},
 					},
 				},
 			},
 			"configuration": jobConfigurationDataSourceAttribute("The HTTP request the job performs each time it fires."),
-			"next_run_at":   dsschema.StringAttribute{Computed: true, Description: "RFC3339 timestamp of the next scheduled fire time."},
 			"created_at":    dsschema.StringAttribute{Computed: true, Description: "RFC3339 creation timestamp."},
 			"updated_at":    dsschema.StringAttribute{Computed: true, Description: "RFC3339 last-modified timestamp."},
 			"version":       dsschema.Int64Attribute{Computed: true, Description: "Monotonic version counter."},

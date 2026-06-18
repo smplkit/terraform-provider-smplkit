@@ -53,12 +53,16 @@ type jobHeader struct {
 // jobEnvOverride is the nested object inside the `environments` map.
 // `enabled` toggles whether the job runs in this environment (the base
 // `enabled` is a read-only roll-up the server derives, so enablement lives
-// entirely here); `configuration` is an optional per-environment override
-// that fully replaces the base configuration in that environment — omit it
-// to inherit the base.
+// entirely here); `schedule` is an optional per-environment cron override
+// that varies the cadence for just this environment; `configuration` is an
+// optional per-environment override that fully replaces the base
+// configuration in that environment — omit it to inherit the base.
+// `next_run_at` is the read-only next fire time in this environment.
 type jobEnvOverride struct {
 	Enabled       types.Bool             `tfsdk:"enabled"`
+	Schedule      types.String           `tfsdk:"schedule"`
 	Configuration *jobConfigurationModel `tfsdk:"configuration"`
+	NextRunAt     types.String           `tfsdk:"next_run_at"`
 }
 
 type jobResourceModel struct {
@@ -72,7 +76,6 @@ type jobResourceModel struct {
 	ConcurrencyPolicy types.String              `tfsdk:"concurrency_policy"`
 	Environments      map[string]jobEnvOverride `tfsdk:"environments"`
 	Configuration     *jobConfigurationModel    `tfsdk:"configuration"`
-	NextRunAt         types.String              `tfsdk:"next_run_at"`
 	CreatedAt         types.String              `tfsdk:"created_at"`
 	UpdatedAt         types.String              `tfsdk:"updated_at"`
 	Version           types.Int64               `tfsdk:"version"`
@@ -138,27 +141,36 @@ func (r *jobResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *
 				Description: "Per-environment overrides keyed by environment id (e.g. `production`). " +
 					"A recurring job fires in an environment only when that environment's entry sets " +
 					"`enabled = true`; an environment with no entry does not run there. Each entry may " +
-					"also carry a `configuration` override that fully replaces the base `configuration` " +
-					"in that environment. Every referenced environment must already exist for the account.",
+					"also carry a `schedule` cron override and a `configuration` override that fully " +
+					"replaces the base `configuration` in that environment. Every referenced " +
+					"environment must already exist for the account.",
 				NestedObject: schema.NestedAttributeObject{
 					Attributes: map[string]schema.Attribute{
 						"enabled": schema.BoolAttribute{
 							Optional:    true,
 							Description: "Whether the job runs in this environment. Defaults to `false`.",
 						},
+						"schedule": schema.StringAttribute{
+							Optional: true,
+							Description: "Optional per-environment cron override that varies the cadence for just " +
+								"this environment (recurring jobs only). A 5-field cron expression evaluated in " +
+								"UTC. Omit to inherit the job's base `schedule`; it cannot turn a one-off job " +
+								"recurring or vice-versa.",
+						},
 						"configuration": jobConfigurationSchemaAttribute(false,
 							"Optional per-environment HTTP request configuration that fully replaces the base "+
 								"`configuration` in this environment. Omit to inherit the base configuration."),
+						"next_run_at": schema.StringAttribute{
+							Computed: true,
+							Description: "RFC3339 timestamp of the next scheduled fire time in this environment. " +
+								"Null when the environment is not enabled, or once a one-off run has fired. " +
+								"Recomputed by the server, so it refreshes as the schedule advances.",
+						},
 					},
 				},
 			},
 			"configuration": jobConfigurationSchemaAttribute(true,
 				"The HTTP request the job performs each time it fires."),
-			"next_run_at": schema.StringAttribute{
-				Computed: true,
-				Description: "RFC3339 timestamp of the next scheduled fire time. Null once a one-off job has fired. " +
-					"Recomputed by the server, so it refreshes as the schedule advances.",
-			},
 			"created_at": schema.StringAttribute{
 				Computed:      true,
 				Description:   "RFC3339 timestamp set by the server when the job was created.",
@@ -395,6 +407,9 @@ func jobEnvironmentsFromModel(envs map[string]jobEnvOverride) map[string]smplkit
 		if !override.Enabled.IsNull() && !override.Enabled.IsUnknown() {
 			je.Enabled = override.Enabled.ValueBool()
 		}
+		if isKnown(override.Schedule) && override.Schedule.ValueString() != "" {
+			je.Schedule = override.Schedule.ValueString()
+		}
 		if override.Configuration != nil {
 			cfg := jobHTTPConfigFromModel(override.Configuration)
 			je.Configuration = &cfg
@@ -464,7 +479,11 @@ func applyJobToModel(job *smplkit.Job, model *jobResourceModel) {
 	} else {
 		envs := make(map[string]jobEnvOverride, len(job.Environments))
 		for env, override := range job.Environments {
-			eo := jobEnvOverride{Enabled: types.BoolValue(override.Enabled)}
+			eo := jobEnvOverride{
+				Enabled:   types.BoolValue(override.Enabled),
+				Schedule:  emptyStringToNull(override.Schedule),
+				NextRunAt: timePointerToString(override.NextRunAt),
+			}
 			if override.Configuration != nil {
 				eo.Configuration = jobConfigurationModelFromHTTP(*override.Configuration)
 			}
@@ -473,7 +492,6 @@ func applyJobToModel(job *smplkit.Job, model *jobResourceModel) {
 		model.Environments = envs
 	}
 	model.Configuration = jobConfigurationModelFromHTTP(job.Configuration)
-	model.NextRunAt = timePointerToString(job.NextRunAt)
 	model.CreatedAt = timePointerToString(job.CreatedAt)
 	model.UpdatedAt = timePointerToString(job.UpdatedAt)
 	if job.Version != nil {
@@ -526,6 +544,18 @@ func jobConfigurationModelFromHTTP(httpCfg smplkit.HttpConfig) *jobConfiguration
 		cfg.Headers = hdrs
 	}
 	return cfg
+}
+
+// emptyStringToNull maps a server-returned string into the framework's
+// String type, treating "" as null. Used for Optional, settable string
+// slots (e.g. the per-environment `schedule` override) where an empty wire
+// value means "unset / inherit the base" and must round-trip as null state
+// rather than an empty string.
+func emptyStringToNull(s string) types.String {
+	if s == "" {
+		return types.StringNull()
+	}
+	return types.StringValue(s)
 }
 
 // isKnown reports whether a types.String carries a usable (non-null,

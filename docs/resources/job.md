@@ -62,13 +62,12 @@ resource "smplkit_job" "nightly_cache_warm" {
 
 - `concurrency_policy` (String) How overlapping runs are handled. `ALLOW` (the default and only value today) permits a new run to start while a previous one is still in flight.
 - `description` (String) Optional free-text description.
-- `environments` (Attributes Map) Per-environment overrides keyed by environment id (e.g. `production`). A recurring job fires in an environment only when that environment's entry sets `enabled = true`; an environment with no entry does not run there. Each entry may also carry a `configuration` override that fully replaces the base `configuration` in that environment. Every referenced environment must already exist for the account. (see [below for nested schema](#nestedatt--environments))
+- `environments` (Attributes Map) Per-environment overrides keyed by environment id (e.g. `production`). A recurring job fires in an environment only when that environment's entry sets `enabled = true`; an environment with no entry does not run there. Each entry may also carry a `schedule` cron override and a `configuration` override that fully replaces the base `configuration` in that environment. Every referenced environment must already exist for the account. (see [below for nested schema](#nestedatt--environments))
 
 ### Read-Only
 
 - `created_at` (String) RFC3339 timestamp set by the server when the job was created.
 - `enabled` (Boolean) Read-only roll-up: `true` when the job is enabled in at least one environment. Derived server-side from `environments`; set enablement per environment via the `environments` map.
-- `next_run_at` (String) RFC3339 timestamp of the next scheduled fire time. Null once a one-off job has fired. Recomputed by the server, so it refreshes as the schedule advances.
 - `recurring` (Boolean) Read-only: `true` for a recurring (cron) schedule, `false` for a one-off (datetime / `now`) schedule. Derived server-side from `schedule`.
 - `type` (String) Job type. Only `http` is supported today.
 - `updated_at` (String) RFC3339 timestamp set by the server on every write. Recomputed on every apply, so plans involving updates show this as `(known after apply)`.
@@ -108,6 +107,11 @@ Optional:
 
 - `configuration` (Attributes) Optional per-environment HTTP request configuration that fully replaces the base `configuration` in this environment. Omit to inherit the base configuration. (see [below for nested schema](#nestedatt--environments--configuration))
 - `enabled` (Boolean) Whether the job runs in this environment. Defaults to `false`.
+- `schedule` (String) Optional per-environment cron override that varies the cadence for just this environment (recurring jobs only). A 5-field cron expression evaluated in UTC. Omit to inherit the job's base `schedule`; it cannot turn a one-off job recurring or vice-versa.
+
+Read-Only:
+
+- `next_run_at` (String) RFC3339 timestamp of the next scheduled fire time in this environment. Null when the environment is not enabled, or once a one-off run has fired. Recomputed by the server, so it refreshes as the schedule advances.
 
 <a id="nestedatt--environments--configuration"></a>
 ### Nested Schema for `environments.configuration`

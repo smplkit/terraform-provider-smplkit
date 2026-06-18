@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -14,14 +15,15 @@ import (
 	smplkit "github.com/smplkit/go-sdk/v3"
 )
 
-// Acceptance tests run against a real smplkit platform (the local
-// platform per ADR-042 by default; production via the release smoke
-// job). They're guarded by TF_ACC=1, which is the framework's standard
-// gate, and they only run when the environment is configured —
-// SMPLKIT_API_KEY must be set (and SMPLKIT_API_URL when targeting the
-// local platform).
-
-const localPlatformURL = "http://localhost"
+// Acceptance tests run against a real smplkit platform and are DESTRUCTIVE
+// (they create and delete real environments, and delete the seeded
+// `development` environment to free a managed-environment slot). Per ADR-052 §2.8
+// they must target an ephemeral production account — never the shared local
+// dev platform. They're guarded by TF_ACC=1 plus SMPLKIT_API_KEY, and the
+// target is selected with SMPLKIT_API_URL (the e2e suite passes the prod
+// endpoint and a throwaway Pro-tier key). The destructive slot-free step
+// additionally refuses a local endpoint unless SMPLKIT_ACC_DESTRUCTIVE=1 is
+// set, so a stray run can't wipe local dev data.
 
 // testAccProtoV6ProviderFactories wires our provider into the testing
 // framework's harness. The factory is invoked once per test; the
@@ -34,8 +36,12 @@ func testAccPreCheck(t *testing.T) {
 	if os.Getenv("SMPLKIT_API_KEY") == "" {
 		t.Skip("SMPLKIT_API_KEY not set; skipping acceptance test")
 	}
+	// SMPLKIT_API_URL must be explicit — these tests are destructive and must
+	// target an ephemeral production account (ADR-052 §2.8). Previously this
+	// defaulted an unset value to the local dev platform, which let a stray
+	// run wipe local dev data; that silent default is gone.
 	if os.Getenv("SMPLKIT_API_URL") == "" {
-		t.Setenv("SMPLKIT_API_URL", localPlatformURL)
+		t.Skip("SMPLKIT_API_URL not set; skipping acceptance test (set it to a throwaway-account endpoint)")
 	}
 }
 
@@ -80,6 +86,16 @@ resource "smplkit_service" "test" {
 
 // ─── smplkit_environment ───────────────────────────────────────────────────
 
+// isLocalEndpoint reports whether the configured SMPLKIT_API_URL points at a
+// local platform. Used to refuse destructive setup against the shared local
+// dev account (ADR-052 §2.8).
+func isLocalEndpoint(raw string) bool {
+	s := strings.ToLower(raw)
+	return strings.Contains(s, "localhost") ||
+		strings.Contains(s, "127.0.0.1") ||
+		strings.Contains(s, "0.0.0.0")
+}
+
 // freeOneManagedEnvironmentSlot deletes the seeded `development`
 // environment, if it exists, so the test below has a free
 // platform.managed_environments slot to spend. A fresh free-tier
@@ -95,6 +111,20 @@ func freeOneManagedEnvironmentSlot(t *testing.T) {
 	apiKey := os.Getenv("SMPLKIT_API_KEY")
 	if apiKey == "" {
 		t.Skip("SMPLKIT_API_KEY not set; skipping env-slot prep")
+	}
+	// Defense-in-depth: never delete `development` against a local endpoint.
+	// These tests are e2e and belong on an ephemeral production account
+	// (ADR-052 §2.8); pointing them at the shared local dev platform once wiped
+	// real data. An explicit SMPLKIT_ACC_DESTRUCTIVE=1 opt-in is required to
+	// run the destructive slot-free against a throwaway *local* account.
+	if isLocalEndpoint(os.Getenv("SMPLKIT_API_URL")) && os.Getenv("SMPLKIT_ACC_DESTRUCTIVE") != "1" {
+		t.Fatalf(
+			"refusing to delete the seeded `development` environment against a local endpoint (%q): "+
+				"these acceptance tests are destructive and must target an ephemeral production account "+
+				"(ADR-052 §2.8), not the local dev platform. Set SMPLKIT_ACC_DESTRUCTIVE=1 only if this is a "+
+				"throwaway local account.",
+			os.Getenv("SMPLKIT_API_URL"),
+		)
 	}
 	cfg := smplkit.Config{APIKey: apiKey}
 	// Route this side-channel client at the same backend the provider
@@ -576,10 +606,9 @@ resource "smplkit_job" "test" {
 // acceptance harness passes SMPLKIT_API_KEY through the environment, so
 // the provider block reads everything from env vars.
 func testProviderConfig() string {
+	// testAccPreCheck has already ensured SMPLKIT_API_URL is set (acceptance
+	// tests skip otherwise), so no local-default fallback here.
 	apiURL := os.Getenv("SMPLKIT_API_URL")
-	if apiURL == "" {
-		apiURL = localPlatformURL
-	}
 	return fmt.Sprintf(`
 provider "smplkit" {
   api_url = %q

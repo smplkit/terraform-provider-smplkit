@@ -22,8 +22,17 @@ test: ## Run unit tests.
 	go test ./... -count=1
 
 .PHONY: testacc
-testacc: ## Run acceptance tests against the local platform (ADR-042). Override the target with SMPLKIT_API_URL.
-	: "$${SMPLKIT_API_URL:=http://localhost}"; \
+testacc: ## Run acceptance tests. Destructive e2e — point ONLY at an ephemeral prod account (ADR-052 §2.8). SMPLKIT_API_URL is required.
+	@if [ -z "$${SMPLKIT_API_URL:-}" ]; then \
+		echo "ERROR: SMPLKIT_API_URL is required." >&2; \
+		echo "  These acceptance tests are destructive e2e tests: they create and delete real" >&2; \
+		echo "  environments and delete the seeded 'development' environment to free a slot." >&2; \
+		echo "  Per ADR-052 §2.8 they must run only against an ephemeral production account — never the" >&2; \
+		echo "  local dev platform. Run them via the e2e suite" >&2; \
+		echo "  (e2e/tests/tools/test_terraform_acceptance.py), or set SMPLKIT_API_URL explicitly" >&2; \
+		echo "  to a throwaway-account endpoint (e.g. https://app.smplkit.com)." >&2; \
+		exit 1; \
+	fi; \
 		TF_ACC=1 SMPLKIT_API_URL="$$SMPLKIT_API_URL" \
 		go test ./internal/provider/... -v -timeout 30m -count=1
 

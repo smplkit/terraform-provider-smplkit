@@ -136,7 +136,10 @@ func TestJobConfigurationModelFromHTTP_PreservesConcreteValues(t *testing.T) {
 
 func TestBuildJobOptions(t *testing.T) {
 	m := &jobResourceModel{
-		Enabled:           types.BoolValue(false),
+		Environments: map[string]jobEnvOverride{
+			"production": {Enabled: types.BoolValue(true)},
+			"staging":    {Enabled: types.BoolValue(false)},
+		},
 		Description:       types.StringValue("nightly warm"),
 		ConcurrencyPolicy: types.StringValue("ALLOW"),
 	}
@@ -144,8 +147,11 @@ func TestBuildJobOptions(t *testing.T) {
 	for _, opt := range buildJobOptions(m) {
 		opt(job)
 	}
-	if job.Enabled != false {
-		t.Errorf("enabled option not applied: %v", job.Enabled)
+	if !job.Environments["production"].Enabled {
+		t.Errorf("production enablement option not applied: %v", job.Environments)
+	}
+	if job.Environments["staging"].Enabled {
+		t.Errorf("staging should be disabled: %v", job.Environments)
 	}
 	if job.Description == nil || *job.Description != "nightly warm" {
 		t.Errorf("description option not applied: %v", job.Description)
@@ -155,14 +161,14 @@ func TestBuildJobOptions(t *testing.T) {
 	}
 }
 
-func TestBuildJobOptions_OmitsNullDescription(t *testing.T) {
+func TestBuildJobOptions_OmitsNullDescriptionAndEmptyEnvironments(t *testing.T) {
 	m := &jobResourceModel{
-		Enabled:           types.BoolValue(true),
 		Description:       types.StringNull(),
 		ConcurrencyPolicy: types.StringValue("ALLOW"),
 	}
-	// New applies the option defaults; a null description must leave the
-	// SDK default (nil) intact rather than setting an empty string.
+	// A null description must leave the SDK default (nil) intact rather than
+	// setting an empty string, and an absent environments map must not emit
+	// a WithJobEnvironments option.
 	job := &smplkit.Job{}
 	for _, opt := range buildJobOptions(m) {
 		opt(job)
@@ -170,35 +176,69 @@ func TestBuildJobOptions_OmitsNullDescription(t *testing.T) {
 	if job.Description != nil {
 		t.Errorf("null description should not be applied, got %v", *job.Description)
 	}
-	if job.Enabled != true {
-		t.Errorf("enabled should be true: %v", job.Enabled)
+	if job.Environments != nil {
+		t.Errorf("absent environments map should not be applied, got %v", job.Environments)
+	}
+}
+
+func TestJobEnvironmentsFromModel(t *testing.T) {
+	envs := jobEnvironmentsFromModel(map[string]jobEnvOverride{
+		"production": {
+			Enabled:       types.BoolValue(true),
+			Configuration: &jobConfigurationModel{URL: types.StringValue("https://prod.test")},
+		},
+		"staging": {Enabled: types.BoolValue(false)},
+	})
+	if !envs["production"].Enabled {
+		t.Errorf("production should be enabled: %+v", envs)
+	}
+	if cfg := envs["production"].Configuration; cfg == nil || cfg.URL != "https://prod.test" {
+		t.Errorf("production config override not converted: %+v", cfg)
+	}
+	if envs["staging"].Enabled || envs["staging"].Configuration != nil {
+		t.Errorf("staging should be disabled with no override: %+v", envs["staging"])
+	}
+	if jobEnvironmentsFromModel(nil) != nil {
+		t.Error("nil model map should convert to nil")
 	}
 }
 
 func TestApplyJobToModel(t *testing.T) {
 	desc := "d"
 	ver := 3
+	recurring := true
 	job := &smplkit.Job{
 		ID:                "nightly",
 		Name:              "Nightly",
 		Description:       &desc,
 		Enabled:           true,
+		Recurring:         &recurring,
 		Type:              "http",
 		Schedule:          "0 2 * * *",
 		ConcurrencyPolicy: "ALLOW",
-		Configuration:     smplkit.HttpConfig{URL: "https://x.test", Method: smplkit.JobHttpMethodPost},
-		Version:           &ver,
+		Environments: map[string]smplkit.JobEnvironment{
+			"production": {Enabled: true, Configuration: &smplkit.HttpConfig{URL: "https://prod.test"}},
+		},
+		Configuration: smplkit.HttpConfig{URL: "https://x.test", Method: smplkit.JobHttpMethodPost},
+		Version:       &ver,
 	}
 	var m jobResourceModel
 	applyJobToModel(job, &m)
 	if m.ID.ValueString() != "nightly" || m.Name.ValueString() != "Nightly" || m.Description.ValueString() != "d" {
 		t.Errorf("scalars: %+v", m)
 	}
-	if m.Enabled.ValueBool() != true || m.Type.ValueString() != "http" || m.ConcurrencyPolicy.ValueString() != "ALLOW" {
+	if m.Enabled.ValueBool() != true || m.Recurring.ValueBool() != true || m.Type.ValueString() != "http" || m.ConcurrencyPolicy.ValueString() != "ALLOW" {
 		t.Errorf("flags: %+v", m)
 	}
 	if m.Configuration == nil || m.Configuration.URL.ValueString() != "https://x.test" {
 		t.Errorf("configuration: %+v", m.Configuration)
+	}
+	prod, ok := m.Environments["production"]
+	if !ok || !prod.Enabled.ValueBool() {
+		t.Errorf("production environment not projected: %+v", m.Environments)
+	}
+	if prod.Configuration == nil || prod.Configuration.URL.ValueString() != "https://prod.test" {
+		t.Errorf("production config override not projected: %+v", prod.Configuration)
 	}
 	if m.Version.ValueInt64() != 3 {
 		t.Errorf("version: %d", m.Version.ValueInt64())

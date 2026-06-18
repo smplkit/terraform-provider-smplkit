@@ -469,16 +469,25 @@ func TestAccJobResource_basicAndUpdate(t *testing.T) {
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		Steps: []resource.TestStep{
 			{
-				// Create a paused (enabled=false) recurring job. The cron is
-				// intentionally rare (Jan 1) so the scheduler won't fire it
-				// and shift next_run_at mid-test.
+				// Create a paused recurring job — production is present in the
+				// environments map but disabled, so the read-only `enabled`
+				// roll-up is false. The cron is intentionally rare (Jan 1) so
+				// the scheduler won't fire it and shift next_run_at mid-test.
 				Config: testProviderConfig() + fmt.Sprintf(`
 resource "smplkit_job" "test" {
   id          = %[1]q
   name        = "Acc Job"
   description = "Acceptance job"
-  enabled     = false
   schedule    = "0 0 1 1 *"
+
+  # Enablement is per-environment. production is a managed environment
+  # seeded on every account and system-protected, so it's the stable
+  # target the acceptance harness can always rely on.
+  environments = {
+    production = {
+      enabled = false
+    }
+  }
 
   configuration = {
     url     = "https://example.com/run"
@@ -497,6 +506,8 @@ resource "smplkit_job" "test" {
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("smplkit_job.test", "id", id),
 					resource.TestCheckResourceAttr("smplkit_job.test", "enabled", "false"),
+					resource.TestCheckResourceAttr("smplkit_job.test", "environments.production.enabled", "false"),
+					resource.TestCheckResourceAttr("smplkit_job.test", "recurring", "true"),
 					resource.TestCheckResourceAttr("smplkit_job.test", "type", "http"),
 					resource.TestCheckResourceAttr("smplkit_job.test", "concurrency_policy", "ALLOW"),
 					resource.TestCheckResourceAttr("smplkit_job.test", "schedule", "0 0 1 1 *"),
@@ -512,14 +523,20 @@ resource "smplkit_job" "test" {
 				),
 			},
 			{
-				// Update: enable it, change name + schedule, rotate the header.
+				// Update: enable it in production, change name + schedule,
+				// rotate the header.
 				Config: testProviderConfig() + fmt.Sprintf(`
 resource "smplkit_job" "test" {
   id          = %[1]q
   name        = "Acc Job v2"
   description = "Acceptance job"
-  enabled     = true
   schedule    = "*/30 * * * *"
+
+  environments = {
+    production = {
+      enabled = true
+    }
+  }
 
   configuration = {
     url     = "https://example.com/run"
@@ -538,6 +555,7 @@ resource "smplkit_job" "test" {
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("smplkit_job.test", "name", "Acc Job v2"),
 					resource.TestCheckResourceAttr("smplkit_job.test", "enabled", "true"),
+					resource.TestCheckResourceAttr("smplkit_job.test", "environments.production.enabled", "true"),
 					resource.TestCheckResourceAttr("smplkit_job.test", "schedule", "*/30 * * * *"),
 					resource.TestCheckResourceAttr("smplkit_job.test", "configuration.headers.0.value", "Bearer acc-rotated"),
 				),

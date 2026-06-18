@@ -3,12 +3,12 @@
 page_title: "smplkit_job Resource - smplkit"
 subcategory: ""
 description: |-
-  A scheduled job: an HTTP request the platform fires on a schedule, recording the history of each run. The id is caller-supplied, immutable, and doubles as the import id. Jobs are account-global — they are not scoped to an environment. Updates are full-replace.
+  A scheduled job: an HTTP request the platform fires on a schedule, recording the history of each run. The id is caller-supplied, immutable, and doubles as the import id. Enablement is per-environment via the environments map — a recurring job fires only in the environments it is enabled in. Updates are full-replace.
 ---
 
 # smplkit_job (Resource)
 
-A scheduled job: an HTTP request the platform fires on a schedule, recording the history of each run. The `id` is caller-supplied, immutable, and doubles as the import id. Jobs are account-global — they are not scoped to an environment. Updates are full-replace.
+A scheduled job: an HTTP request the platform fires on a schedule, recording the history of each run. The `id` is caller-supplied, immutable, and doubles as the import id. Enablement is per-environment via the `environments` map — a recurring job fires only in the environments it is enabled in. Updates are full-replace.
 
 ## Example Usage
 
@@ -62,12 +62,14 @@ resource "smplkit_job" "nightly_cache_warm" {
 
 - `concurrency_policy` (String) How overlapping runs are handled. `ALLOW` (the default and only value today) permits a new run to start while a previous one is still in flight.
 - `description` (String) Optional free-text description.
-- `enabled` (Boolean) Whether the job schedules runs. Set `false` to pause without deleting. Defaults to `true`.
+- `environments` (Attributes Map) Per-environment overrides keyed by environment id (e.g. `production`). A recurring job fires in an environment only when that environment's entry sets `enabled = true`; an environment with no entry does not run there. Each entry may also carry a `configuration` override that fully replaces the base `configuration` in that environment. Every referenced environment must already exist for the account. (see [below for nested schema](#nestedatt--environments))
 
 ### Read-Only
 
 - `created_at` (String) RFC3339 timestamp set by the server when the job was created.
+- `enabled` (Boolean) Read-only roll-up: `true` when the job is enabled in at least one environment. Derived server-side from `environments`; set enablement per environment via the `environments` map.
 - `next_run_at` (String) RFC3339 timestamp of the next scheduled fire time. Null once a one-off job has fired. Recomputed by the server, so it refreshes as the schedule advances.
+- `recurring` (Boolean) Read-only: `true` for a recurring (cron) schedule, `false` for a one-off (datetime / `now`) schedule. Derived server-side from `schedule`.
 - `type` (String) Job type. Only `http` is supported today.
 - `updated_at` (String) RFC3339 timestamp set by the server on every write. Recomputed on every apply, so plans involving updates show this as `(known after apply)`.
 - `version` (Number) Monotonic counter bumped by the server on every write, starting at 1.
@@ -91,6 +93,41 @@ Optional:
 
 <a id="nestedatt--configuration--headers"></a>
 ### Nested Schema for `configuration.headers`
+
+Required:
+
+- `name` (String) Header name.
+- `value` (String, Sensitive) Header value (e.g. an auth token).
+
+
+
+<a id="nestedatt--environments"></a>
+### Nested Schema for `environments`
+
+Optional:
+
+- `configuration` (Attributes) Optional per-environment HTTP request configuration that fully replaces the base `configuration` in this environment. Omit to inherit the base configuration. (see [below for nested schema](#nestedatt--environments--configuration))
+- `enabled` (Boolean) Whether the job runs in this environment. Defaults to `false`.
+
+<a id="nestedatt--environments--configuration"></a>
+### Nested Schema for `environments.configuration`
+
+Required:
+
+- `url` (String) Absolute `http://` or `https://` URL the job calls when it fires.
+
+Optional:
+
+- `body` (String) Request body sent on each run. Omit for an empty body. Sent verbatim — pair with a matching `Content-Type` header.
+- `ca_cert` (String) Optional PEM-encoded certificate (or bundle) trusted in addition to the system CA store. Ignored when `tls_verify` is `false`.
+- `headers` (Attributes List) Headers attached to every run's request. Values carry credentials and are marked sensitive; unlike audit forwarders, the jobs service stores and returns them as supplied, so they round-trip cleanly. (see [below for nested schema](#nestedatt--environments--configuration--headers))
+- `method` (String) HTTP method. One of `GET`, `POST`, `PUT`, `PATCH`, `DELETE`. Defaults to `POST`.
+- `success_status` (String) Response status that counts as success — an exact code (`200`, `204`) or a class (`2xx`, `5xx`). Defaults to `2xx`.
+- `timeout` (Number) Per-run timeout in seconds. A run that does not complete within this many seconds fails with reason `TIMEOUT`. Defaults to `30`.
+- `tls_verify` (Boolean) Whether the destination's TLS certificate chain is verified. Defaults to `true`. Set `false` to skip verification.
+
+<a id="nestedatt--environments--configuration--headers"></a>
+### Nested Schema for `environments.configuration.headers`
 
 Required:
 

@@ -3,12 +3,12 @@
 page_title: "smplkit_job Data Source - smplkit"
 subcategory: ""
 description: |-
-  Read a smplkit scheduled job by id. Jobs are account-global (not environment-scoped).
+  Read a smplkit scheduled job by id. Enablement is per-environment via the environments map.
 ---
 
 # smplkit_job (Data Source)
 
-Read a smplkit scheduled job by id. Jobs are account-global (not environment-scoped).
+Read a smplkit scheduled job by id. Enablement is per-environment via the `environments` map.
 
 ## Example Usage
 
@@ -35,9 +35,11 @@ output "next_run_at" {
 - `configuration` (Attributes) The HTTP request the job performs each time it fires. (see [below for nested schema](#nestedatt--configuration))
 - `created_at` (String) RFC3339 creation timestamp.
 - `description` (String) Optional description.
-- `enabled` (Boolean) Whether the job schedules runs.
+- `enabled` (Boolean) Read-only roll-up: `true` when the job is enabled in at least one environment.
+- `environments` (Attributes Map) Per-environment overrides keyed by environment id. The job runs in an environment only when that environment's entry is `enabled`. (see [below for nested schema](#nestedatt--environments))
 - `name` (String) Display name.
 - `next_run_at` (String) RFC3339 timestamp of the next scheduled fire time.
+- `recurring` (Boolean) Whether the job runs on a recurring (cron) schedule, as opposed to a one-off datetime / `now`.
 - `schedule` (String) Cron expression, ISO-8601 datetime, or `now`.
 - `type` (String) Job type (currently always `http`).
 - `updated_at` (String) RFC3339 last-modified timestamp.
@@ -59,6 +61,38 @@ Read-Only:
 
 <a id="nestedatt--configuration--headers"></a>
 ### Nested Schema for `configuration.headers`
+
+Read-Only:
+
+- `name` (String) Header name.
+- `value` (String, Sensitive) Header value.
+
+
+
+<a id="nestedatt--environments"></a>
+### Nested Schema for `environments`
+
+Read-Only:
+
+- `configuration` (Attributes) Per-environment HTTP request configuration override. (see [below for nested schema](#nestedatt--environments--configuration))
+- `enabled` (Boolean) Whether the job runs in this environment.
+
+<a id="nestedatt--environments--configuration"></a>
+### Nested Schema for `environments.configuration`
+
+Read-Only:
+
+- `body` (String) Request body sent on each run.
+- `ca_cert` (String) Optional additional trusted PEM certificate.
+- `headers` (Attributes List) Headers attached to every run's request. (see [below for nested schema](#nestedatt--environments--configuration--headers))
+- `method` (String) HTTP method.
+- `success_status` (String) Status that counts as success.
+- `timeout` (Number) Per-run timeout in seconds.
+- `tls_verify` (Boolean) Whether the destination's TLS chain is verified.
+- `url` (String) Destination URL.
+
+<a id="nestedatt--environments--configuration--headers"></a>
+### Nested Schema for `environments.configuration.headers`
 
 Read-Only:
 

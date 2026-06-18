@@ -455,6 +455,35 @@ func (d *auditForwarderDataSource) Read(ctx context.Context, req datasource.Read
 
 // ───── smplkit_job ─────────────────────────────────────────────────────────
 
+// jobConfigurationDataSourceAttribute builds the Computed SingleNestedAttribute
+// used for both the job's base `configuration` and each per-environment
+// override `configuration` in the data source schema.
+func jobConfigurationDataSourceAttribute(description string) dsschema.SingleNestedAttribute {
+	return dsschema.SingleNestedAttribute{
+		Computed:    true,
+		Description: description,
+		Attributes: map[string]dsschema.Attribute{
+			"url":            dsschema.StringAttribute{Computed: true, Description: "Destination URL."},
+			"method":         dsschema.StringAttribute{Computed: true, Description: "HTTP method."},
+			"body":           dsschema.StringAttribute{Computed: true, Description: "Request body sent on each run."},
+			"success_status": dsschema.StringAttribute{Computed: true, Description: "Status that counts as success."},
+			"timeout":        dsschema.Int64Attribute{Computed: true, Description: "Per-run timeout in seconds."},
+			"tls_verify":     dsschema.BoolAttribute{Computed: true, Description: "Whether the destination's TLS chain is verified."},
+			"ca_cert":        dsschema.StringAttribute{Computed: true, Description: "Optional additional trusted PEM certificate."},
+			"headers": dsschema.ListNestedAttribute{
+				Computed:    true,
+				Description: "Headers attached to every run's request.",
+				NestedObject: dsschema.NestedAttributeObject{
+					Attributes: map[string]dsschema.Attribute{
+						"name":  dsschema.StringAttribute{Computed: true, Description: "Header name."},
+						"value": dsschema.StringAttribute{Computed: true, Sensitive: true, Description: "Header value."},
+					},
+				},
+			},
+		},
+	}
+}
+
 // NewJobDataSource returns the read-only data source for scheduled jobs.
 func NewJobDataSource() datasource.DataSource {
 	return &jobDataSource{}
@@ -470,42 +499,32 @@ func (d *jobDataSource) Metadata(_ context.Context, req datasource.MetadataReque
 
 func (d *jobDataSource) Schema(_ context.Context, _ datasource.SchemaRequest, resp *datasource.SchemaResponse) {
 	resp.Schema = dsschema.Schema{
-		Description: "Read a smplkit scheduled job by id. Jobs are account-global (not environment-scoped).",
+		Description: "Read a smplkit scheduled job by id. Enablement is per-environment via the `environments` map.",
 		Attributes: map[string]dsschema.Attribute{
 			"id":                 dsschema.StringAttribute{Required: true, Description: "The job key."},
 			"name":               dsschema.StringAttribute{Computed: true, Description: "Display name."},
 			"description":        dsschema.StringAttribute{Computed: true, Description: "Optional description."},
-			"enabled":            dsschema.BoolAttribute{Computed: true, Description: "Whether the job schedules runs."},
+			"enabled":            dsschema.BoolAttribute{Computed: true, Description: "Read-only roll-up: `true` when the job is enabled in at least one environment."},
+			"recurring":          dsschema.BoolAttribute{Computed: true, Description: "Whether the job runs on a recurring (cron) schedule, as opposed to a one-off datetime / `now`."},
 			"type":               dsschema.StringAttribute{Computed: true, Description: "Job type (currently always `http`)."},
 			"schedule":           dsschema.StringAttribute{Computed: true, Description: "Cron expression, ISO-8601 datetime, or `now`."},
 			"concurrency_policy": dsschema.StringAttribute{Computed: true, Description: "How overlapping runs are handled (currently always `ALLOW`)."},
-			"configuration": dsschema.SingleNestedAttribute{
-				Computed:    true,
-				Description: "The HTTP request the job performs each time it fires.",
-				Attributes: map[string]dsschema.Attribute{
-					"url":            dsschema.StringAttribute{Computed: true, Description: "Destination URL."},
-					"method":         dsschema.StringAttribute{Computed: true, Description: "HTTP method."},
-					"body":           dsschema.StringAttribute{Computed: true, Description: "Request body sent on each run."},
-					"success_status": dsschema.StringAttribute{Computed: true, Description: "Status that counts as success."},
-					"timeout":        dsschema.Int64Attribute{Computed: true, Description: "Per-run timeout in seconds."},
-					"tls_verify":     dsschema.BoolAttribute{Computed: true, Description: "Whether the destination's TLS chain is verified."},
-					"ca_cert":        dsschema.StringAttribute{Computed: true, Description: "Optional additional trusted PEM certificate."},
-					"headers": dsschema.ListNestedAttribute{
-						Computed:    true,
-						Description: "Headers attached to every run's request.",
-						NestedObject: dsschema.NestedAttributeObject{
-							Attributes: map[string]dsschema.Attribute{
-								"name":  dsschema.StringAttribute{Computed: true, Description: "Header name."},
-								"value": dsschema.StringAttribute{Computed: true, Sensitive: true, Description: "Header value."},
-							},
-						},
+			"environments": dsschema.MapNestedAttribute{
+				Computed: true,
+				Description: "Per-environment overrides keyed by environment id. The job runs in an environment " +
+					"only when that environment's entry is `enabled`.",
+				NestedObject: dsschema.NestedAttributeObject{
+					Attributes: map[string]dsschema.Attribute{
+						"enabled":       dsschema.BoolAttribute{Computed: true, Description: "Whether the job runs in this environment."},
+						"configuration": jobConfigurationDataSourceAttribute("Per-environment HTTP request configuration override."),
 					},
 				},
 			},
-			"next_run_at": dsschema.StringAttribute{Computed: true, Description: "RFC3339 timestamp of the next scheduled fire time."},
-			"created_at":  dsschema.StringAttribute{Computed: true, Description: "RFC3339 creation timestamp."},
-			"updated_at":  dsschema.StringAttribute{Computed: true, Description: "RFC3339 last-modified timestamp."},
-			"version":     dsschema.Int64Attribute{Computed: true, Description: "Monotonic version counter."},
+			"configuration": jobConfigurationDataSourceAttribute("The HTTP request the job performs each time it fires."),
+			"next_run_at":   dsschema.StringAttribute{Computed: true, Description: "RFC3339 timestamp of the next scheduled fire time."},
+			"created_at":    dsschema.StringAttribute{Computed: true, Description: "RFC3339 creation timestamp."},
+			"updated_at":    dsschema.StringAttribute{Computed: true, Description: "RFC3339 last-modified timestamp."},
+			"version":       dsschema.Int64Attribute{Computed: true, Description: "Monotonic version counter."},
 		},
 	}
 }

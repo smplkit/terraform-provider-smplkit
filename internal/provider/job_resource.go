@@ -8,7 +8,6 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
-	"github.com/hashicorp/terraform-plugin-framework/resource/schema/booldefault"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringdefault"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
@@ -51,19 +50,32 @@ type jobHeader struct {
 	Value types.String `tfsdk:"value"`
 }
 
+// jobEnvOverride is the nested object inside the `environments` map.
+// `enabled` toggles whether the job runs in this environment (the base
+// `enabled` is a read-only roll-up the server derives, so enablement lives
+// entirely here); `configuration` is an optional per-environment override
+// that fully replaces the base configuration in that environment — omit it
+// to inherit the base.
+type jobEnvOverride struct {
+	Enabled       types.Bool             `tfsdk:"enabled"`
+	Configuration *jobConfigurationModel `tfsdk:"configuration"`
+}
+
 type jobResourceModel struct {
-	ID                types.String           `tfsdk:"id"`
-	Name              types.String           `tfsdk:"name"`
-	Description       types.String           `tfsdk:"description"`
-	Enabled           types.Bool             `tfsdk:"enabled"`
-	Type              types.String           `tfsdk:"type"`
-	Schedule          types.String           `tfsdk:"schedule"`
-	ConcurrencyPolicy types.String           `tfsdk:"concurrency_policy"`
-	Configuration     *jobConfigurationModel `tfsdk:"configuration"`
-	NextRunAt         types.String           `tfsdk:"next_run_at"`
-	CreatedAt         types.String           `tfsdk:"created_at"`
-	UpdatedAt         types.String           `tfsdk:"updated_at"`
-	Version           types.Int64            `tfsdk:"version"`
+	ID                types.String              `tfsdk:"id"`
+	Name              types.String              `tfsdk:"name"`
+	Description       types.String              `tfsdk:"description"`
+	Enabled           types.Bool                `tfsdk:"enabled"`
+	Recurring         types.Bool                `tfsdk:"recurring"`
+	Type              types.String              `tfsdk:"type"`
+	Schedule          types.String              `tfsdk:"schedule"`
+	ConcurrencyPolicy types.String              `tfsdk:"concurrency_policy"`
+	Environments      map[string]jobEnvOverride `tfsdk:"environments"`
+	Configuration     *jobConfigurationModel    `tfsdk:"configuration"`
+	NextRunAt         types.String              `tfsdk:"next_run_at"`
+	CreatedAt         types.String              `tfsdk:"created_at"`
+	UpdatedAt         types.String              `tfsdk:"updated_at"`
+	Version           types.Int64               `tfsdk:"version"`
 }
 
 func (r *jobResource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
@@ -73,8 +85,9 @@ func (r *jobResource) Metadata(_ context.Context, req resource.MetadataRequest, 
 func (r *jobResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
 		Description: "A scheduled job: an HTTP request the platform fires on a schedule, recording the history of " +
-			"each run. The `id` is caller-supplied, immutable, and doubles as the import id. Jobs are account-global " +
-			"— they are not scoped to an environment. Updates are full-replace.",
+			"each run. The `id` is caller-supplied, immutable, and doubles as the import id. Enablement is " +
+			"per-environment via the `environments` map — a recurring job fires only in the environments it is " +
+			"enabled in. Updates are full-replace.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
 				Required: true,
@@ -91,11 +104,15 @@ func (r *jobResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *
 				Description: "Optional free-text description.",
 			},
 			"enabled": schema.BoolAttribute{
-				Optional: true,
 				Computed: true,
-				Default:  booldefault.StaticBool(true),
-				Description: "Whether the job schedules runs. Set `false` to pause without deleting. " +
-					"Defaults to `true`.",
+				Description: "Read-only roll-up: `true` when the job is enabled in at least one environment. " +
+					"Derived server-side from `environments`; set enablement per environment via the " +
+					"`environments` map.",
+			},
+			"recurring": schema.BoolAttribute{
+				Computed: true,
+				Description: "Read-only: `true` for a recurring (cron) schedule, `false` for a one-off " +
+					"(datetime / `now`) schedule. Derived server-side from `schedule`.",
 			},
 			"type": schema.StringAttribute{
 				Computed:      true,
@@ -116,69 +133,27 @@ func (r *jobResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *
 					"new run to start while a previous one is still in flight.",
 				Validators: []validator.String{stringvalidator.OneOf(validJobConcurrencyPolicies...)},
 			},
-			"configuration": schema.SingleNestedAttribute{
-				Required:    true,
-				Description: "The HTTP request the job performs each time it fires.",
-				Attributes: map[string]schema.Attribute{
-					"url": schema.StringAttribute{
-						Required:    true,
-						Description: "Absolute `http://` or `https://` URL the job calls when it fires.",
-					},
-					"method": schema.StringAttribute{
-						Optional:    true,
-						Computed:    true,
-						Description: "HTTP method. One of `GET`, `POST`, `PUT`, `PATCH`, `DELETE`. Defaults to `POST`.",
-						Validators:  []validator.String{stringvalidator.OneOf(validJobMethods...)},
-					},
-					"headers": schema.ListNestedAttribute{
-						Optional: true,
-						Description: "Headers attached to every run's request. Values carry credentials and are " +
-							"marked sensitive; unlike audit forwarders, the jobs service stores and returns them as " +
-							"supplied, so they round-trip cleanly.",
-						NestedObject: schema.NestedAttributeObject{
-							Attributes: map[string]schema.Attribute{
-								"name": schema.StringAttribute{
-									Required:    true,
-									Description: "Header name.",
-								},
-								"value": schema.StringAttribute{
-									Required:    true,
-									Sensitive:   true,
-									Description: "Header value (e.g. an auth token).",
-								},
-							},
+			"environments": schema.MapNestedAttribute{
+				Optional: true,
+				Description: "Per-environment overrides keyed by environment id (e.g. `production`). " +
+					"A recurring job fires in an environment only when that environment's entry sets " +
+					"`enabled = true`; an environment with no entry does not run there. Each entry may " +
+					"also carry a `configuration` override that fully replaces the base `configuration` " +
+					"in that environment. Every referenced environment must already exist for the account.",
+				NestedObject: schema.NestedAttributeObject{
+					Attributes: map[string]schema.Attribute{
+						"enabled": schema.BoolAttribute{
+							Optional:    true,
+							Description: "Whether the job runs in this environment. Defaults to `false`.",
 						},
-					},
-					"body": schema.StringAttribute{
-						Optional: true,
-						Description: "Request body sent on each run. Omit for an empty body. Sent verbatim — pair " +
-							"with a matching `Content-Type` header.",
-					},
-					"success_status": schema.StringAttribute{
-						Optional: true,
-						Computed: true,
-						Description: "Response status that counts as success — an exact code (`200`, `204`) or a " +
-							"class (`2xx`, `5xx`). Defaults to `2xx`.",
-					},
-					"timeout": schema.Int64Attribute{
-						Optional: true,
-						Computed: true,
-						Description: "Per-run timeout in seconds. A run that does not complete within this many " +
-							"seconds fails with reason `TIMEOUT`. Defaults to `30`.",
-					},
-					"tls_verify": schema.BoolAttribute{
-						Optional: true,
-						Computed: true,
-						Description: "Whether the destination's TLS certificate chain is verified. Defaults to " +
-							"`true`. Set `false` to skip verification.",
-					},
-					"ca_cert": schema.StringAttribute{
-						Optional: true,
-						Description: "Optional PEM-encoded certificate (or bundle) trusted in addition to the system " +
-							"CA store. Ignored when `tls_verify` is `false`.",
+						"configuration": jobConfigurationSchemaAttribute(false,
+							"Optional per-environment HTTP request configuration that fully replaces the base "+
+								"`configuration` in this environment. Omit to inherit the base configuration."),
 					},
 				},
 			},
+			"configuration": jobConfigurationSchemaAttribute(true,
+				"The HTTP request the job performs each time it fires."),
 			"next_run_at": schema.StringAttribute{
 				Computed: true,
 				Description: "RFC3339 timestamp of the next scheduled fire time. Null once a one-off job has fired. " +
@@ -197,6 +172,78 @@ func (r *jobResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *
 			"version": schema.Int64Attribute{
 				Computed:    true,
 				Description: "Monotonic counter bumped by the server on every write, starting at 1.",
+			},
+		},
+	}
+}
+
+// jobConfigurationSchemaAttribute builds the SingleNestedAttribute used for
+// both the job's base `configuration` and each per-environment override
+// `configuration`. required controls whether the block must be supplied
+// (true for the base configuration, false for the optional per-environment
+// override); description is the block's top-level docstring.
+func jobConfigurationSchemaAttribute(required bool, description string) schema.SingleNestedAttribute {
+	return schema.SingleNestedAttribute{
+		Required:    required,
+		Optional:    !required,
+		Description: description,
+		Attributes: map[string]schema.Attribute{
+			"url": schema.StringAttribute{
+				Required:    true,
+				Description: "Absolute `http://` or `https://` URL the job calls when it fires.",
+			},
+			"method": schema.StringAttribute{
+				Optional:    true,
+				Computed:    true,
+				Description: "HTTP method. One of `GET`, `POST`, `PUT`, `PATCH`, `DELETE`. Defaults to `POST`.",
+				Validators:  []validator.String{stringvalidator.OneOf(validJobMethods...)},
+			},
+			"headers": schema.ListNestedAttribute{
+				Optional: true,
+				Description: "Headers attached to every run's request. Values carry credentials and are " +
+					"marked sensitive; unlike audit forwarders, the jobs service stores and returns them as " +
+					"supplied, so they round-trip cleanly.",
+				NestedObject: schema.NestedAttributeObject{
+					Attributes: map[string]schema.Attribute{
+						"name": schema.StringAttribute{
+							Required:    true,
+							Description: "Header name.",
+						},
+						"value": schema.StringAttribute{
+							Required:    true,
+							Sensitive:   true,
+							Description: "Header value (e.g. an auth token).",
+						},
+					},
+				},
+			},
+			"body": schema.StringAttribute{
+				Optional: true,
+				Description: "Request body sent on each run. Omit for an empty body. Sent verbatim — pair " +
+					"with a matching `Content-Type` header.",
+			},
+			"success_status": schema.StringAttribute{
+				Optional: true,
+				Computed: true,
+				Description: "Response status that counts as success — an exact code (`200`, `204`) or a " +
+					"class (`2xx`, `5xx`). Defaults to `2xx`.",
+			},
+			"timeout": schema.Int64Attribute{
+				Optional: true,
+				Computed: true,
+				Description: "Per-run timeout in seconds. A run that does not complete within this many " +
+					"seconds fails with reason `TIMEOUT`. Defaults to `30`.",
+			},
+			"tls_verify": schema.BoolAttribute{
+				Optional: true,
+				Computed: true,
+				Description: "Whether the destination's TLS certificate chain is verified. Defaults to " +
+					"`true`. Set `false` to skip verification.",
+			},
+			"ca_cert": schema.StringAttribute{
+				Optional: true,
+				Description: "Optional PEM-encoded certificate (or bundle) trusted in addition to the system " +
+					"CA store. Ignored when `tls_verify` is `false`.",
 			},
 		},
 	}
@@ -278,7 +325,10 @@ func (r *jobResource) Update(ctx context.Context, req resource.UpdateRequest, re
 
 	job.Name = plan.Name.ValueString()
 	job.Description = stringOrNull(plan.Description)
-	job.Enabled = plan.Enabled.ValueBool()
+	// Full-replace the per-environment override map with the plan's. A nil
+	// map clears enablement everywhere (the base `enabled` is a read-only
+	// roll-up the server derives).
+	job.Environments = jobEnvironmentsFromModel(plan.Environments)
 	job.Schedule = plan.Schedule.ValueString()
 	if !plan.ConcurrencyPolicy.IsNull() && !plan.ConcurrencyPolicy.IsUnknown() && plan.ConcurrencyPolicy.ValueString() != "" {
 		job.ConcurrencyPolicy = plan.ConcurrencyPolicy.ValueString()
@@ -312,13 +362,14 @@ func (r *jobResource) ImportState(ctx context.Context, req resource.ImportStateR
 	resource.ImportStatePassthroughID(ctx, path.Root("id"), req, resp)
 }
 
-// buildJobOptions threads the optional/defaulted scalar attributes through
-// the SDK's With* options. enabled and concurrency_policy are
-// Optional+Computed with schema defaults, so they are always known here.
+// buildJobOptions threads the optional/defaulted attributes through the
+// SDK's With* options. Enablement is per-environment, so it travels through
+// WithJobEnvironments; concurrency_policy is Optional+Computed with a schema
+// default, so it is always known here.
 func buildJobOptions(data *jobResourceModel) []smplkit.JobOption {
 	opts := []smplkit.JobOption{}
-	if !data.Enabled.IsNull() && !data.Enabled.IsUnknown() {
-		opts = append(opts, smplkit.WithJobEnabled(data.Enabled.ValueBool()))
+	if envs := jobEnvironmentsFromModel(data.Environments); envs != nil {
+		opts = append(opts, smplkit.WithJobEnvironments(envs))
 	}
 	if !data.Description.IsNull() && !data.Description.IsUnknown() {
 		opts = append(opts, smplkit.WithJobDescription(data.Description.ValueString()))
@@ -327,6 +378,30 @@ func buildJobOptions(data *jobResourceModel) []smplkit.JobOption {
 		opts = append(opts, smplkit.WithJobConcurrencyPolicy(data.ConcurrencyPolicy.ValueString()))
 	}
 	return opts
+}
+
+// jobEnvironmentsFromModel builds the SDK per-environment override map from
+// the Terraform model. A per-environment configuration override carries
+// plaintext header values (just like the base configuration); the jobs
+// service stores and returns them as supplied, so no redaction handling is
+// needed on the round-trip.
+func jobEnvironmentsFromModel(envs map[string]jobEnvOverride) map[string]smplkit.JobEnvironment {
+	if len(envs) == 0 {
+		return nil
+	}
+	out := make(map[string]smplkit.JobEnvironment, len(envs))
+	for env, override := range envs {
+		je := smplkit.JobEnvironment{}
+		if !override.Enabled.IsNull() && !override.Enabled.IsUnknown() {
+			je.Enabled = override.Enabled.ValueBool()
+		}
+		if override.Configuration != nil {
+			cfg := jobHTTPConfigFromModel(override.Configuration)
+			je.Configuration = &cfg
+		}
+		out[env] = je
+	}
+	return out
 }
 
 // jobHTTPConfigFromModel maps the schema's configuration block into the
@@ -376,9 +451,27 @@ func applyJobToModel(job *smplkit.Job, model *jobResourceModel) {
 	model.Name = types.StringValue(job.Name)
 	model.Description = stringPointerToTypes(job.Description)
 	model.Enabled = types.BoolValue(job.Enabled)
+	if job.Recurring != nil {
+		model.Recurring = types.BoolValue(*job.Recurring)
+	} else {
+		model.Recurring = types.BoolNull()
+	}
 	model.Type = types.StringValue(job.Type)
 	model.Schedule = types.StringValue(job.Schedule)
 	model.ConcurrencyPolicy = types.StringValue(job.ConcurrencyPolicy)
+	if len(job.Environments) == 0 {
+		model.Environments = nil
+	} else {
+		envs := make(map[string]jobEnvOverride, len(job.Environments))
+		for env, override := range job.Environments {
+			eo := jobEnvOverride{Enabled: types.BoolValue(override.Enabled)}
+			if override.Configuration != nil {
+				eo.Configuration = jobConfigurationModelFromHTTP(*override.Configuration)
+			}
+			envs[env] = eo
+		}
+		model.Environments = envs
+	}
 	model.Configuration = jobConfigurationModelFromHTTP(job.Configuration)
 	model.NextRunAt = timePointerToString(job.NextRunAt)
 	model.CreatedAt = timePointerToString(job.CreatedAt)

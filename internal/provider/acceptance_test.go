@@ -537,7 +537,7 @@ resource "smplkit_job" "test" {
 					resource.TestCheckResourceAttr("smplkit_job.test", "id", id),
 					resource.TestCheckResourceAttr("smplkit_job.test", "enabled", "false"),
 					resource.TestCheckResourceAttr("smplkit_job.test", "environments.production.enabled", "false"),
-					resource.TestCheckResourceAttr("smplkit_job.test", "recurring", "true"),
+					resource.TestCheckResourceAttr("smplkit_job.test", "kind", "recurring"),
 					resource.TestCheckResourceAttr("smplkit_job.test", "type", "http"),
 					resource.TestCheckResourceAttr("smplkit_job.test", "concurrency_policy", "ALLOW"),
 					resource.TestCheckResourceAttr("smplkit_job.test", "schedule", "0 0 1 1 *"),
@@ -593,6 +593,57 @@ resource "smplkit_job" "test" {
 			{
 				// Headers round-trip plaintext, so a full import-verify works
 				// without ignoring any attribute.
+				ResourceName:      "smplkit_job.test",
+				ImportState:       true,
+				ImportStateVerify: true,
+			},
+		},
+	})
+}
+
+// TestAccJobResource_manual covers a manual job: `schedule` is omitted, so the
+// job never auto-fires and runs only when triggered. The server derives
+// `kind = manual` and the read-only `schedule` rolls up empty (null in state).
+func TestAccJobResource_manual(t *testing.T) {
+	id := fmt.Sprintf("tfacc-job-manual-%d", time.Now().UnixNano())
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				// No `schedule` attribute → a manual job. production is enabled
+				// so the read-only `enabled` roll-up is true; a manual job is
+				// still triggerable in the environments it's enabled in.
+				Config: testProviderConfig() + fmt.Sprintf(`
+resource "smplkit_job" "test" {
+  id          = %[1]q
+  name        = "Acc Manual Job"
+  description = "Acceptance manual job"
+
+  environments = {
+    production = {
+      enabled = true
+    }
+  }
+
+  configuration = {
+    url    = "https://example.com/run"
+    method = "POST"
+  }
+}
+`, id),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("smplkit_job.test", "id", id),
+					resource.TestCheckResourceAttr("smplkit_job.test", "kind", "manual"),
+					resource.TestCheckResourceAttr("smplkit_job.test", "type", "http"),
+					resource.TestCheckResourceAttr("smplkit_job.test", "enabled", "true"),
+					resource.TestCheckResourceAttr("smplkit_job.test", "environments.production.enabled", "true"),
+					// A manual job carries no base schedule.
+					resource.TestCheckNoResourceAttr("smplkit_job.test", "schedule"),
+					resource.TestCheckResourceAttrSet("smplkit_job.test", "created_at"),
+				),
+			},
+			{
 				ResourceName:      "smplkit_job.test",
 				ImportState:       true,
 				ImportStateVerify: true,

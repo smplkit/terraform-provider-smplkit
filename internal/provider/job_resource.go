@@ -3,6 +3,8 @@ package provider
 import (
 	"context"
 	"fmt"
+	"strings"
+	"time"
 
 	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/path"
@@ -70,7 +72,7 @@ type jobResourceModel struct {
 	Name              types.String              `tfsdk:"name"`
 	Description       types.String              `tfsdk:"description"`
 	Enabled           types.Bool                `tfsdk:"enabled"`
-	Recurring         types.Bool                `tfsdk:"recurring"`
+	Kind              types.String              `tfsdk:"kind"`
 	Type              types.String              `tfsdk:"type"`
 	Schedule          types.String              `tfsdk:"schedule"`
 	ConcurrencyPolicy types.String              `tfsdk:"concurrency_policy"`
@@ -112,10 +114,13 @@ func (r *jobResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *
 					"Derived server-side from `environments`; set enablement per environment via the " +
 					"`environments` map.",
 			},
-			"recurring": schema.BoolAttribute{
+			"kind": schema.StringAttribute{
 				Computed: true,
-				Description: "Read-only: `true` for a recurring (cron) schedule, `false` for a one-off " +
-					"(datetime / `now`) schedule. Derived server-side from `schedule`.",
+				Description: "Read-only: how the job runs, derived server-side from `schedule`. One of " +
+					"`recurring` (a cron schedule, fires on a repeating cadence), `manual` (no schedule, " +
+					"never auto-fires — runs only when triggered), or `one_off` (a datetime / `now` " +
+					"schedule, runs a single time then is spent).",
+				PlanModifiers: []planmodifier.String{stringplanmodifier.UseStateForUnknown()},
 			},
 			"type": schema.StringAttribute{
 				Computed:      true,
@@ -123,10 +128,11 @@ func (r *jobResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *
 				PlanModifiers: []planmodifier.String{stringplanmodifier.UseStateForUnknown()},
 			},
 			"schedule": schema.StringAttribute{
-				Required: true,
-				Description: "When the job runs: a 5-field cron expression evaluated in UTC (recurring), an " +
+				Optional: true,
+				Description: "When the job runs: a 5-field cron expression evaluated in UTC (a recurring job), an " +
 					"ISO-8601 datetime (a one-off run at that instant), or the literal `now` (run once, as soon as " +
-					"possible). A datetime or `now` job disables itself after it fires.",
+					"possible). Omit it (or set it empty) for a manual job that never auto-fires and runs only when " +
+					"triggered. A datetime or `now` job disables itself after it fires.",
 			},
 			"concurrency_policy": schema.StringAttribute{
 				Optional: true,
@@ -281,13 +287,7 @@ func (r *jobResource) Create(ctx context.Context, req resource.CreateRequest, re
 	}
 
 	configuration := jobHTTPConfigFromModel(data.Configuration)
-	job := r.client.Jobs().New(
-		data.ID.ValueString(),
-		data.Name.ValueString(),
-		data.Schedule.ValueString(),
-		configuration,
-		buildJobOptions(&data)...,
-	)
+	job := r.newJobFromSchedule(&data, configuration)
 	if err := job.Save(ctx); err != nil {
 		addSDKErrorDiagnostic(&resp.Diagnostics, fmt.Sprintf("creating smplkit_job %q", data.ID.ValueString()), err)
 		return
@@ -372,6 +372,39 @@ func (r *jobResource) Delete(ctx context.Context, req resource.DeleteRequest, re
 
 func (r *jobResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
 	resource.ImportStatePassthroughID(ctx, path.Root("id"), req, resp)
+}
+
+// newJobFromSchedule constructs an unsaved Job using the SDK constructor that
+// matches the plan's `schedule`, mirroring how the SDK itself branches:
+//
+//   - empty/null schedule    → NewManualJob   (manual: never auto-fires)
+//   - the literal "now"       → Schedule(now)  (one-off: runs once, then spent)
+//   - an RFC3339 datetime     → Schedule(t)    (one-off at that instant)
+//   - anything else (a cron)  → NewRecurringJob
+//
+// `schedule` is Optional, so a null/unknown value is treated as empty (manual).
+func (r *jobResource) newJobFromSchedule(data *jobResourceModel, configuration smplkit.HttpConfig) *smplkit.Job {
+	jobs := r.client.Jobs()
+	id := data.ID.ValueString()
+	name := data.Name.ValueString()
+	opts := buildJobOptions(data)
+
+	schedule := ""
+	if isKnown(data.Schedule) {
+		schedule = data.Schedule.ValueString()
+	}
+
+	switch {
+	case schedule == "":
+		return jobs.NewManualJob(id, name, configuration, opts...)
+	case strings.EqualFold(schedule, "now"):
+		return jobs.Schedule(id, name, time.Now().UTC(), configuration, opts...)
+	default:
+		if t, err := time.Parse(time.RFC3339, schedule); err == nil {
+			return jobs.Schedule(id, name, t, configuration, opts...)
+		}
+		return jobs.NewRecurringJob(id, name, schedule, configuration, opts...)
+	}
 }
 
 // buildJobOptions threads the optional/defaulted attributes through the
@@ -466,10 +499,10 @@ func applyJobToModel(job *smplkit.Job, model *jobResourceModel) {
 	model.Name = types.StringValue(job.Name)
 	model.Description = stringPointerToTypes(job.Description)
 	model.Enabled = types.BoolValue(job.Enabled)
-	if job.Recurring != nil {
-		model.Recurring = types.BoolValue(*job.Recurring)
+	if job.Kind != nil {
+		model.Kind = types.StringValue(string(*job.Kind))
 	} else {
-		model.Recurring = types.BoolNull()
+		model.Kind = types.StringNull()
 	}
 	model.Type = types.StringValue(job.Type)
 	model.Schedule = types.StringValue(job.Schedule)

@@ -214,14 +214,14 @@ func TestJobEnvironmentsFromModel(t *testing.T) {
 func TestApplyJobToModel(t *testing.T) {
 	desc := "d"
 	ver := 3
-	recurring := true
+	kind := smplkit.JobKindRecurring
 	nextRun := time.Date(2026, 7, 1, 2, 0, 0, 0, time.UTC)
 	job := &smplkit.Job{
 		ID:                "nightly",
 		Name:              "Nightly",
 		Description:       &desc,
 		Enabled:           true,
-		Recurring:         &recurring,
+		Kind:              &kind,
 		Type:              "http",
 		Schedule:          "0 2 * * *",
 		ConcurrencyPolicy: "ALLOW",
@@ -242,7 +242,7 @@ func TestApplyJobToModel(t *testing.T) {
 	if m.ID.ValueString() != "nightly" || m.Name.ValueString() != "Nightly" || m.Description.ValueString() != "d" {
 		t.Errorf("scalars: %+v", m)
 	}
-	if m.Enabled.ValueBool() != true || m.Recurring.ValueBool() != true || m.Type.ValueString() != "http" || m.ConcurrencyPolicy.ValueString() != "ALLOW" {
+	if m.Enabled.ValueBool() != true || m.Kind.ValueString() != "recurring" || m.Type.ValueString() != "http" || m.ConcurrencyPolicy.ValueString() != "ALLOW" {
 		t.Errorf("flags: %+v", m)
 	}
 	if m.Configuration == nil || m.Configuration.URL.ValueString() != "https://x.test" {
@@ -275,5 +275,113 @@ func TestApplyJobToModel(t *testing.T) {
 	}
 	if m.Version.ValueInt64() != 3 {
 		t.Errorf("version: %d", m.Version.ValueInt64())
+	}
+}
+
+// newTestJobResource builds a jobResource backed by a real (offline) SmplClient.
+// NewClient does no network I/O, so this is hermetic; newJobFromSchedule only
+// constructs an unsaved Job and never calls Save.
+func newTestJobResource(t *testing.T) *jobResource {
+	t.Helper()
+	client, err := smplkit.NewClient(smplkit.Config{APIKey: "test-key"})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	return &jobResource{client: client}
+}
+
+// kindFromConstructedSchedule classifies the SDK constructor a given
+// `job.Schedule` string came from. `Job.Kind` is server-derived and nil on an
+// unsaved job, so on the construction path the schedule string is the signal:
+// empty → manual (NewManualJob), an RFC3339 datetime → one-off (Schedule), and
+// anything else → recurring (NewRecurringJob). This mirrors how the server
+// later derives Kind, letting the test assert which constructor was chosen.
+func kindFromConstructedSchedule(schedule string) smplkit.JobKind {
+	if schedule == "" {
+		return smplkit.JobKindManual
+	}
+	if _, err := time.Parse(time.RFC3339, schedule); err == nil {
+		return smplkit.JobKindOneOff
+	}
+	return smplkit.JobKindRecurring
+}
+
+func TestNewJobFromSchedule(t *testing.T) {
+	cfg := smplkit.HttpConfig{URL: "https://x.test"}
+	r := newTestJobResource(t)
+
+	cases := []struct {
+		name         string
+		schedule     types.String
+		wantKind     smplkit.JobKind
+		wantSchedule string // exact match; "" means only the resolved kind is asserted (one-off `now`)
+	}{
+		{
+			name:         "null schedule yields a manual job",
+			schedule:     types.StringNull(),
+			wantKind:     smplkit.JobKindManual,
+			wantSchedule: "",
+		},
+		{
+			name:         "unknown schedule yields a manual job",
+			schedule:     types.StringUnknown(),
+			wantKind:     smplkit.JobKindManual,
+			wantSchedule: "",
+		},
+		{
+			name:         "empty schedule yields a manual job",
+			schedule:     types.StringValue(""),
+			wantKind:     smplkit.JobKindManual,
+			wantSchedule: "",
+		},
+		{
+			name:         "cron schedule yields a recurring job",
+			schedule:     types.StringValue("0 2 * * *"),
+			wantKind:     smplkit.JobKindRecurring,
+			wantSchedule: "0 2 * * *",
+		},
+		{
+			name:         "rfc3339 datetime yields a one-off job",
+			schedule:     types.StringValue("2030-01-02T03:04:05Z"),
+			wantKind:     smplkit.JobKindOneOff,
+			wantSchedule: "2030-01-02T03:04:05Z",
+		},
+		{
+			name:         "literal now yields a one-off job",
+			schedule:     types.StringValue("now"),
+			wantKind:     smplkit.JobKindOneOff,
+			wantSchedule: "", // resolved to time.Now(), not compared verbatim
+		},
+		{
+			name:         "case-insensitive NOW yields a one-off job",
+			schedule:     types.StringValue("NOW"),
+			wantKind:     smplkit.JobKindOneOff,
+			wantSchedule: "",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			data := &jobResourceModel{
+				ID:       types.StringValue("job-id"),
+				Name:     types.StringValue("Job"),
+				Schedule: tc.schedule,
+			}
+			job := r.newJobFromSchedule(data, cfg)
+			if job.ID != "job-id" || job.Name != "Job" {
+				t.Errorf("id/name not threaded: id=%q name=%q", job.ID, job.Name)
+			}
+			if job.Configuration.URL != "https://x.test" {
+				t.Errorf("configuration not threaded: %+v", job.Configuration)
+			}
+			// Job.Kind is server-derived (nil on an unsaved job), so classify by
+			// the schedule string the constructor produced.
+			if got := kindFromConstructedSchedule(job.Schedule); got != tc.wantKind {
+				t.Errorf("constructed kind = %q (schedule=%q), want %q", got, job.Schedule, tc.wantKind)
+			}
+			if tc.wantSchedule != "" && job.Schedule != tc.wantSchedule {
+				t.Errorf("schedule = %q, want %q", job.Schedule, tc.wantSchedule)
+			}
+		})
 	}
 }

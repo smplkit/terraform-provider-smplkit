@@ -56,19 +56,19 @@ resource "smplkit_job" "nightly_cache_warm" {
 - `configuration` (Attributes) The HTTP request the job performs each time it fires. (see [below for nested schema](#nestedatt--configuration))
 - `id` (String) The job key (e.g. `nightly-cache-warm`). Caller-supplied at create and immutable. Use this same value as the `terraform import` identifier.
 - `name` (String) Display name shown in the smplkit console.
-- `schedule` (String) When the job runs: a 5-field cron expression evaluated in UTC (recurring), an ISO-8601 datetime (a one-off run at that instant), or the literal `now` (run once, as soon as possible). A datetime or `now` job disables itself after it fires.
 
 ### Optional
 
 - `concurrency_policy` (String) How overlapping runs are handled. `ALLOW` (the default and only value today) permits a new run to start while a previous one is still in flight.
 - `description` (String) Optional free-text description.
 - `environments` (Attributes Map) Per-environment overrides keyed by environment id (e.g. `production`). A recurring job fires in an environment only when that environment's entry sets `enabled = true`; an environment with no entry does not run there. Each entry may also carry a `schedule` cron override and a `configuration` override that fully replaces the base `configuration` in that environment. Every referenced environment must already exist for the account. (see [below for nested schema](#nestedatt--environments))
+- `schedule` (String) When the job runs: a 5-field cron expression evaluated in UTC (a recurring job), an ISO-8601 datetime (a one-off run at that instant), or the literal `now` (run once, as soon as possible). Omit it (or set it empty) for a manual job that never auto-fires and runs only when triggered. A datetime or `now` job disables itself after it fires.
 
 ### Read-Only
 
 - `created_at` (String) RFC3339 timestamp set by the server when the job was created.
 - `enabled` (Boolean) Read-only roll-up: `true` when the job is enabled in at least one environment. Derived server-side from `environments`; set enablement per environment via the `environments` map.
-- `recurring` (Boolean) Read-only: `true` for a recurring (cron) schedule, `false` for a one-off (datetime / `now`) schedule. Derived server-side from `schedule`.
+- `kind` (String) Read-only: how the job runs, derived server-side from `schedule`. One of `recurring` (a cron schedule, fires on a repeating cadence), `manual` (no schedule, never auto-fires — runs only when triggered), or `one_off` (a datetime / `now` schedule, runs a single time then is spent).
 - `type` (String) Job type. Only `http` is supported today.
 - `updated_at` (String) RFC3339 timestamp set by the server on every write. Recomputed on every apply, so plans involving updates show this as `(known after apply)`.
 - `version` (Number) Monotonic counter bumped by the server on every write, starting at 1.

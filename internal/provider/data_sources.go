@@ -505,7 +505,7 @@ func (d *jobDataSource) Schema(_ context.Context, _ datasource.SchemaRequest, re
 			"name":               dsschema.StringAttribute{Computed: true, Description: "Display name."},
 			"description":        dsschema.StringAttribute{Computed: true, Description: "Optional description."},
 			"enabled":            dsschema.BoolAttribute{Computed: true, Description: "Read-only roll-up: `true` when the job is enabled in at least one environment."},
-			"recurring":          dsschema.BoolAttribute{Computed: true, Description: "Whether the job runs on a recurring (cron) schedule, as opposed to a one-off datetime / `now`."},
+			"kind":               dsschema.StringAttribute{Computed: true, Description: "How the job runs, derived from its base `schedule`: `recurring` (cron), `manual` (no schedule, runs only when triggered), or `one_off` (a datetime / `now` schedule)."},
 			"type":               dsschema.StringAttribute{Computed: true, Description: "Job type (currently always `http`)."},
 			"schedule":           dsschema.StringAttribute{Computed: true, Description: "Cron expression, ISO-8601 datetime, or `now`."},
 			"concurrency_policy": dsschema.StringAttribute{Computed: true, Description: "How overlapping runs are handled (currently always `ALLOW`)."},

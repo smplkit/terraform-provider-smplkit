@@ -39,8 +39,8 @@ output "production_next_run_at" {
 - `description` (String) Optional description.
 - `enabled` (Boolean) Read-only roll-up: `true` when the job is enabled in at least one environment.
 - `environments` (Attributes Map) Per-environment overrides keyed by environment id. The job runs in an environment only when that environment's entry is `enabled`. (see [below for nested schema](#nestedatt--environments))
+- `kind` (String) How the job runs, derived from its base `schedule`: `recurring` (cron), `manual` (no schedule, runs only when triggered), or `one_off` (a datetime / `now` schedule).
 - `name` (String) Display name.
-- `recurring` (Boolean) Whether the job runs on a recurring (cron) schedule, as opposed to a one-off datetime / `now`.
 - `schedule` (String) Cron expression, ISO-8601 datetime, or `now`.
 - `type` (String) Job type (currently always `http`).
 - `updated_at` (String) RFC3339 last-modified timestamp.

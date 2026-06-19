@@ -505,7 +505,10 @@ func applyJobToModel(job *smplkit.Job, model *jobResourceModel) {
 		model.Kind = types.StringNull()
 	}
 	model.Type = types.StringValue(job.Type)
-	model.Schedule = types.StringValue(job.Schedule)
+	// A manual job has no schedule; the server returns "" which must map to
+	// null so it matches an omitted (null) schedule in config — otherwise
+	// Terraform reports an "inconsistent result after apply" (null -> "").
+	model.Schedule = emptyStringToNull(job.Schedule)
 	model.ConcurrencyPolicy = types.StringValue(job.ConcurrencyPolicy)
 	if len(job.Environments) == 0 {
 		model.Environments = nil

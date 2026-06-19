@@ -523,7 +523,7 @@ resource "smplkit_job" "test" {
     url     = "https://example.com/run"
     method  = "POST"
     body    = "{\"scope\":\"all\"}"
-    timeout = 45
+    timeout = 20
     headers = [
       {
         name  = "Authorization"
@@ -542,7 +542,7 @@ resource "smplkit_job" "test" {
 					resource.TestCheckResourceAttr("smplkit_job.test", "concurrency_policy", "ALLOW"),
 					resource.TestCheckResourceAttr("smplkit_job.test", "schedule", "0 0 1 1 *"),
 					resource.TestCheckResourceAttr("smplkit_job.test", "configuration.method", "POST"),
-					resource.TestCheckResourceAttr("smplkit_job.test", "configuration.timeout", "45"),
+					resource.TestCheckResourceAttr("smplkit_job.test", "configuration.timeout", "20"),
 					// Server-applied defaults surface through the model.
 					resource.TestCheckResourceAttr("smplkit_job.test", "configuration.success_status", "2xx"),
 					resource.TestCheckResourceAttr("smplkit_job.test", "configuration.tls_verify", "true"),
@@ -572,7 +572,7 @@ resource "smplkit_job" "test" {
     url     = "https://example.com/run"
     method  = "POST"
     body    = "{\"scope\":\"all\"}"
-    timeout = 45
+    timeout = 20
     headers = [
       {
         name  = "Authorization"

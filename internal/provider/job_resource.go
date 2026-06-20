@@ -63,6 +63,7 @@ type jobHeader struct {
 type jobEnvOverride struct {
 	Enabled       types.Bool             `tfsdk:"enabled"`
 	Schedule      types.String           `tfsdk:"schedule"`
+	Timezone      types.String           `tfsdk:"timezone"`
 	Configuration *jobConfigurationModel `tfsdk:"configuration"`
 	NextRunAt     types.String           `tfsdk:"next_run_at"`
 }
@@ -75,6 +76,7 @@ type jobResourceModel struct {
 	Kind              types.String              `tfsdk:"kind"`
 	Type              types.String              `tfsdk:"type"`
 	Schedule          types.String              `tfsdk:"schedule"`
+	Timezone          types.String              `tfsdk:"timezone"`
 	ConcurrencyPolicy types.String              `tfsdk:"concurrency_policy"`
 	Environments      map[string]jobEnvOverride `tfsdk:"environments"`
 	Configuration     *jobConfigurationModel    `tfsdk:"configuration"`
@@ -134,6 +136,12 @@ func (r *jobResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *
 					"possible). Omit it (or set it empty) for a manual job that never auto-fires and runs only when " +
 					"triggered. A datetime or `now` job disables itself after it fires.",
 			},
+			"timezone": schema.StringAttribute{
+				Optional: true,
+				Description: "IANA timezone name (e.g. `America/New_York`) the cron `schedule` is evaluated in. " +
+					"Applies to recurring jobs only; ignored for one-off and manual jobs. Omit it to evaluate " +
+					"the cron in UTC.",
+			},
 			"concurrency_policy": schema.StringAttribute{
 				Optional: true,
 				Computed: true,
@@ -147,9 +155,9 @@ func (r *jobResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *
 				Description: "Per-environment overrides keyed by environment id (e.g. `production`). " +
 					"A recurring job fires in an environment only when that environment's entry sets " +
 					"`enabled = true`; an environment with no entry does not run there. Each entry may " +
-					"also carry a `schedule` cron override and a `configuration` override that fully " +
-					"replaces the base `configuration` in that environment. Every referenced " +
-					"environment must already exist for the account.",
+					"also carry a `schedule` cron override, a `timezone` override, and a `configuration` " +
+					"override that fully replaces the base `configuration` in that environment. Every " +
+					"referenced environment must already exist for the account.",
 				NestedObject: schema.NestedAttributeObject{
 					Attributes: map[string]schema.Attribute{
 						"enabled": schema.BoolAttribute{
@@ -162,6 +170,13 @@ func (r *jobResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *
 								"this environment (recurring jobs only). A 5-field cron expression evaluated in " +
 								"UTC. Omit to inherit the job's base `schedule`; it cannot turn a one-off job " +
 								"recurring or vice-versa.",
+						},
+						"timezone": schema.StringAttribute{
+							Optional: true,
+							Description: "Optional per-environment IANA timezone override (e.g. `America/New_York`) " +
+								"that varies the zone the cron is evaluated in for just this environment " +
+								"(recurring jobs only). Omit to inherit the job's base `timezone` (or UTC when " +
+								"the base is unset).",
 						},
 						"configuration": jobConfigurationSchemaAttribute(false,
 							"Optional per-environment HTTP request configuration that fully replaces the base "+
@@ -342,6 +357,7 @@ func (r *jobResource) Update(ctx context.Context, req resource.UpdateRequest, re
 	// roll-up the server derives).
 	job.Environments = jobEnvironmentsFromModel(plan.Environments)
 	job.Schedule = plan.Schedule.ValueString()
+	job.Timezone = plan.Timezone.ValueString()
 	if !plan.ConcurrencyPolicy.IsNull() && !plan.ConcurrencyPolicy.IsUnknown() && plan.ConcurrencyPolicy.ValueString() != "" {
 		job.ConcurrencyPolicy = plan.ConcurrencyPolicy.ValueString()
 	}
@@ -394,17 +410,27 @@ func (r *jobResource) newJobFromSchedule(data *jobResourceModel, configuration s
 		schedule = data.Schedule.ValueString()
 	}
 
+	var job *smplkit.Job
 	switch {
 	case schedule == "":
-		return jobs.NewManualJob(id, name, configuration, opts...)
+		job = jobs.NewManualJob(id, name, configuration, opts...)
 	case strings.EqualFold(schedule, "now"):
-		return jobs.Schedule(id, name, time.Now().UTC(), configuration, opts...)
+		job = jobs.Schedule(id, name, time.Now().UTC(), configuration, opts...)
 	default:
 		if t, err := time.Parse(time.RFC3339, schedule); err == nil {
-			return jobs.Schedule(id, name, t, configuration, opts...)
+			job = jobs.Schedule(id, name, t, configuration, opts...)
+		} else {
+			job = jobs.NewRecurringJob(id, name, schedule, configuration, opts...)
 		}
-		return jobs.NewRecurringJob(id, name, schedule, configuration, opts...)
 	}
+
+	// `timezone` is Optional with no SDK constructor option, so set the base
+	// timezone directly when supplied; leave it empty (server-default UTC)
+	// otherwise. The post-Save read writes the server-authoritative value back.
+	if isKnown(data.Timezone) && data.Timezone.ValueString() != "" {
+		job.SetTimezone(data.Timezone.ValueString())
+	}
+	return job
 }
 
 // buildJobOptions threads the optional/defaulted attributes through the
@@ -442,6 +468,9 @@ func jobEnvironmentsFromModel(envs map[string]jobEnvOverride) map[string]smplkit
 		}
 		if isKnown(override.Schedule) && override.Schedule.ValueString() != "" {
 			je.Schedule = override.Schedule.ValueString()
+		}
+		if isKnown(override.Timezone) && override.Timezone.ValueString() != "" {
+			je.Timezone = override.Timezone.ValueString()
 		}
 		if override.Configuration != nil {
 			cfg := jobHTTPConfigFromModel(override.Configuration)
@@ -509,6 +538,10 @@ func applyJobToModel(job *smplkit.Job, model *jobResourceModel) {
 	// null so it matches an omitted (null) schedule in config — otherwise
 	// Terraform reports an "inconsistent result after apply" (null -> "").
 	model.Schedule = emptyStringToNull(job.Schedule)
+	// `timezone` is Optional and settable; the server returns "" when unset,
+	// which must map to null so it round-trips against an omitted (null)
+	// timezone in config rather than reporting null -> "".
+	model.Timezone = emptyStringToNull(job.Timezone)
 	model.ConcurrencyPolicy = types.StringValue(job.ConcurrencyPolicy)
 	if len(job.Environments) == 0 {
 		model.Environments = nil
@@ -518,6 +551,7 @@ func applyJobToModel(job *smplkit.Job, model *jobResourceModel) {
 			eo := jobEnvOverride{
 				Enabled:   types.BoolValue(override.Enabled),
 				Schedule:  emptyStringToNull(override.Schedule),
+				Timezone:  emptyStringToNull(override.Timezone),
 				NextRunAt: timePointerToString(override.NextRunAt),
 			}
 			if override.Configuration != nil {

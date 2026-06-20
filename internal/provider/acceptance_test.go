@@ -509,6 +509,7 @@ resource "smplkit_job" "test" {
   name        = "Acc Job"
   description = "Acceptance job"
   schedule    = "0 0 1 1 *"
+  timezone    = "America/New_York"
 
   # Enablement is per-environment. production is a managed environment
   # seeded on every account and system-protected, so it's the stable
@@ -541,6 +542,7 @@ resource "smplkit_job" "test" {
 					resource.TestCheckResourceAttr("smplkit_job.test", "type", "http"),
 					resource.TestCheckResourceAttr("smplkit_job.test", "concurrency_policy", "ALLOW"),
 					resource.TestCheckResourceAttr("smplkit_job.test", "schedule", "0 0 1 1 *"),
+					resource.TestCheckResourceAttr("smplkit_job.test", "timezone", "America/New_York"),
 					resource.TestCheckResourceAttr("smplkit_job.test", "configuration.method", "POST"),
 					resource.TestCheckResourceAttr("smplkit_job.test", "configuration.timeout", "20"),
 					// Server-applied defaults surface through the model.
@@ -561,10 +563,12 @@ resource "smplkit_job" "test" {
   name        = "Acc Job v2"
   description = "Acceptance job"
   schedule    = "*/30 * * * *"
+  timezone    = "Europe/London"
 
   environments = {
     production = {
-      enabled = true
+      enabled  = true
+      timezone = "Asia/Tokyo"
     }
   }
 
@@ -587,6 +591,8 @@ resource "smplkit_job" "test" {
 					resource.TestCheckResourceAttr("smplkit_job.test", "enabled", "true"),
 					resource.TestCheckResourceAttr("smplkit_job.test", "environments.production.enabled", "true"),
 					resource.TestCheckResourceAttr("smplkit_job.test", "schedule", "*/30 * * * *"),
+					resource.TestCheckResourceAttr("smplkit_job.test", "timezone", "Europe/London"),
+					resource.TestCheckResourceAttr("smplkit_job.test", "environments.production.timezone", "Asia/Tokyo"),
 					resource.TestCheckResourceAttr("smplkit_job.test", "configuration.headers.0.value", "Bearer acc-rotated"),
 				),
 			},

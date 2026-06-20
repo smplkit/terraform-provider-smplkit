@@ -187,15 +187,19 @@ func TestJobEnvironmentsFromModel(t *testing.T) {
 		"production": {
 			Enabled:       types.BoolValue(true),
 			Schedule:      types.StringValue("*/15 * * * *"),
+			Timezone:      types.StringValue("America/New_York"),
 			Configuration: &jobConfigurationModel{URL: types.StringValue("https://prod.test")},
 		},
-		"staging": {Enabled: types.BoolValue(false), Schedule: types.StringNull()},
+		"staging": {Enabled: types.BoolValue(false), Schedule: types.StringNull(), Timezone: types.StringNull()},
 	})
 	if !envs["production"].Enabled {
 		t.Errorf("production should be enabled: %+v", envs)
 	}
 	if envs["production"].Schedule != "*/15 * * * *" {
 		t.Errorf("production per-env schedule override not converted: %q", envs["production"].Schedule)
+	}
+	if envs["production"].Timezone != "America/New_York" {
+		t.Errorf("production per-env timezone override not converted: %q", envs["production"].Timezone)
 	}
 	if cfg := envs["production"].Configuration; cfg == nil || cfg.URL != "https://prod.test" {
 		t.Errorf("production config override not converted: %+v", cfg)
@@ -205,6 +209,9 @@ func TestJobEnvironmentsFromModel(t *testing.T) {
 	}
 	if envs["staging"].Schedule != "" {
 		t.Errorf("staging null schedule should convert to empty (inherit base): %q", envs["staging"].Schedule)
+	}
+	if envs["staging"].Timezone != "" {
+		t.Errorf("staging null timezone should convert to empty (inherit base): %q", envs["staging"].Timezone)
 	}
 	if jobEnvironmentsFromModel(nil) != nil {
 		t.Error("nil model map should convert to nil")
@@ -224,11 +231,13 @@ func TestApplyJobToModel(t *testing.T) {
 		Kind:              &kind,
 		Type:              "http",
 		Schedule:          "0 2 * * *",
+		Timezone:          "Europe/London",
 		ConcurrencyPolicy: "ALLOW",
 		Environments: map[string]smplkit.JobEnvironment{
 			"production": {
 				Enabled:       true,
 				Schedule:      "*/15 * * * *",
+				Timezone:      "America/New_York",
 				Configuration: &smplkit.HttpConfig{URL: "https://prod.test"},
 				NextRunAt:     &nextRun,
 			},
@@ -245,6 +254,9 @@ func TestApplyJobToModel(t *testing.T) {
 	if m.Enabled.ValueBool() != true || m.Kind.ValueString() != "recurring" || m.Type.ValueString() != "http" || m.ConcurrencyPolicy.ValueString() != "ALLOW" {
 		t.Errorf("flags: %+v", m)
 	}
+	if m.Schedule.ValueString() != "0 2 * * *" || m.Timezone.ValueString() != "Europe/London" {
+		t.Errorf("base schedule/timezone not projected: schedule=%q timezone=%q", m.Schedule.ValueString(), m.Timezone.ValueString())
+	}
 	if m.Configuration == nil || m.Configuration.URL.ValueString() != "https://x.test" {
 		t.Errorf("configuration: %+v", m.Configuration)
 	}
@@ -258,6 +270,9 @@ func TestApplyJobToModel(t *testing.T) {
 	if prod.Schedule.ValueString() != "*/15 * * * *" {
 		t.Errorf("production per-env schedule not projected: %q", prod.Schedule.ValueString())
 	}
+	if prod.Timezone.ValueString() != "America/New_York" {
+		t.Errorf("production per-env timezone not projected: %q", prod.Timezone.ValueString())
+	}
 	if prod.NextRunAt.ValueString() != "2026-07-01T02:00:00Z" {
 		t.Errorf("production per-env next_run_at not projected: %q", prod.NextRunAt.ValueString())
 	}
@@ -269,6 +284,9 @@ func TestApplyJobToModel(t *testing.T) {
 	}
 	if !stg.Schedule.IsNull() {
 		t.Errorf("staging schedule should be null when unset, got %q", stg.Schedule.ValueString())
+	}
+	if !stg.Timezone.IsNull() {
+		t.Errorf("staging timezone should be null when unset, got %q", stg.Timezone.ValueString())
 	}
 	if !stg.NextRunAt.IsNull() {
 		t.Errorf("staging next_run_at should be null when unset, got %q", stg.NextRunAt.ValueString())
@@ -313,8 +331,10 @@ func TestNewJobFromSchedule(t *testing.T) {
 	cases := []struct {
 		name         string
 		schedule     types.String
+		timezone     types.String
 		wantKind     smplkit.JobKind
 		wantSchedule string // exact match; "" means only the resolved kind is asserted (one-off `now`)
+		wantTimezone string // expected job.Timezone; "" means unset/empty
 	}{
 		{
 			name:         "null schedule yields a manual job",
@@ -339,6 +359,22 @@ func TestNewJobFromSchedule(t *testing.T) {
 			schedule:     types.StringValue("0 2 * * *"),
 			wantKind:     smplkit.JobKindRecurring,
 			wantSchedule: "0 2 * * *",
+		},
+		{
+			name:         "recurring job carries a base timezone when set",
+			schedule:     types.StringValue("0 2 * * *"),
+			timezone:     types.StringValue("America/New_York"),
+			wantKind:     smplkit.JobKindRecurring,
+			wantSchedule: "0 2 * * *",
+			wantTimezone: "America/New_York",
+		},
+		{
+			name:         "null timezone leaves the job timezone empty (UTC)",
+			schedule:     types.StringValue("0 2 * * *"),
+			timezone:     types.StringNull(),
+			wantKind:     smplkit.JobKindRecurring,
+			wantSchedule: "0 2 * * *",
+			wantTimezone: "",
 		},
 		{
 			name:         "rfc3339 datetime yields a one-off job",
@@ -366,6 +402,7 @@ func TestNewJobFromSchedule(t *testing.T) {
 				ID:       types.StringValue("job-id"),
 				Name:     types.StringValue("Job"),
 				Schedule: tc.schedule,
+				Timezone: tc.timezone,
 			}
 			job := r.newJobFromSchedule(data, cfg)
 			if job.ID != "job-id" || job.Name != "Job" {
@@ -381,6 +418,9 @@ func TestNewJobFromSchedule(t *testing.T) {
 			}
 			if tc.wantSchedule != "" && job.Schedule != tc.wantSchedule {
 				t.Errorf("schedule = %q, want %q", job.Schedule, tc.wantSchedule)
+			}
+			if job.Timezone != tc.wantTimezone {
+				t.Errorf("timezone = %q, want %q", job.Timezone, tc.wantTimezone)
 			}
 		})
 	}

@@ -142,6 +142,7 @@ func TestBuildJobOptions(t *testing.T) {
 			"staging":    {Enabled: types.BoolValue(false)},
 		},
 		Description:       types.StringValue("nightly warm"),
+		RetryPolicy:       types.StringValue("aggressive-retry"),
 		ConcurrencyPolicy: types.StringValue("ALLOW"),
 	}
 	job := &smplkit.Job{}
@@ -157,6 +158,9 @@ func TestBuildJobOptions(t *testing.T) {
 	if job.Description == nil || *job.Description != "nightly warm" {
 		t.Errorf("description option not applied: %v", job.Description)
 	}
+	if job.RetryPolicy != "aggressive-retry" {
+		t.Errorf("retry_policy option not applied: %q", job.RetryPolicy)
+	}
 	if job.ConcurrencyPolicy != "ALLOW" {
 		t.Errorf("concurrency_policy option not applied: %q", job.ConcurrencyPolicy)
 	}
@@ -165,6 +169,7 @@ func TestBuildJobOptions(t *testing.T) {
 func TestBuildJobOptions_OmitsNullDescriptionAndEmptyEnvironments(t *testing.T) {
 	m := &jobResourceModel{
 		Description:       types.StringNull(),
+		RetryPolicy:       types.StringNull(),
 		ConcurrencyPolicy: types.StringValue("ALLOW"),
 	}
 	// A null description must leave the SDK default (nil) intact rather than
@@ -177,6 +182,9 @@ func TestBuildJobOptions_OmitsNullDescriptionAndEmptyEnvironments(t *testing.T) 
 	if job.Description != nil {
 		t.Errorf("null description should not be applied, got %v", *job.Description)
 	}
+	if job.RetryPolicy != "" {
+		t.Errorf("null retry_policy should not be applied, got %q", job.RetryPolicy)
+	}
 	if job.Environments != nil {
 		t.Errorf("absent environments map should not be applied, got %v", job.Environments)
 	}
@@ -188,9 +196,10 @@ func TestJobEnvironmentsFromModel(t *testing.T) {
 			Enabled:       types.BoolValue(true),
 			Schedule:      types.StringValue("*/15 * * * *"),
 			Timezone:      types.StringValue("America/New_York"),
+			RetryPolicy:   types.StringValue("aggressive-retry"),
 			Configuration: &jobConfigurationModel{URL: types.StringValue("https://prod.test")},
 		},
-		"staging": {Enabled: types.BoolValue(false), Schedule: types.StringNull(), Timezone: types.StringNull()},
+		"staging": {Enabled: types.BoolValue(false), Schedule: types.StringNull(), Timezone: types.StringNull(), RetryPolicy: types.StringNull()},
 	})
 	if !envs["production"].Enabled {
 		t.Errorf("production should be enabled: %+v", envs)
@@ -200,6 +209,9 @@ func TestJobEnvironmentsFromModel(t *testing.T) {
 	}
 	if envs["production"].Timezone != "America/New_York" {
 		t.Errorf("production per-env timezone override not converted: %q", envs["production"].Timezone)
+	}
+	if envs["production"].RetryPolicy != "aggressive-retry" {
+		t.Errorf("production per-env retry_policy override not converted: %q", envs["production"].RetryPolicy)
 	}
 	if cfg := envs["production"].Configuration; cfg == nil || cfg.URL != "https://prod.test" {
 		t.Errorf("production config override not converted: %+v", cfg)
@@ -212,6 +224,9 @@ func TestJobEnvironmentsFromModel(t *testing.T) {
 	}
 	if envs["staging"].Timezone != "" {
 		t.Errorf("staging null timezone should convert to empty (inherit base): %q", envs["staging"].Timezone)
+	}
+	if envs["staging"].RetryPolicy != "" {
+		t.Errorf("staging null retry_policy should convert to empty (inherit base): %q", envs["staging"].RetryPolicy)
 	}
 	if jobEnvironmentsFromModel(nil) != nil {
 		t.Error("nil model map should convert to nil")
@@ -232,12 +247,14 @@ func TestApplyJobToModel(t *testing.T) {
 		Type:              "http",
 		Schedule:          "0 2 * * *",
 		Timezone:          "Europe/London",
+		RetryPolicy:       "aggressive-retry",
 		ConcurrencyPolicy: "ALLOW",
 		Environments: map[string]smplkit.JobEnvironment{
 			"production": {
 				Enabled:       true,
 				Schedule:      "*/15 * * * *",
 				Timezone:      "America/New_York",
+				RetryPolicy:   "prod-retry",
 				Configuration: &smplkit.HttpConfig{URL: "https://prod.test"},
 				NextRunAt:     &nextRun,
 			},
@@ -257,6 +274,9 @@ func TestApplyJobToModel(t *testing.T) {
 	if m.Schedule.ValueString() != "0 2 * * *" || m.Timezone.ValueString() != "Europe/London" {
 		t.Errorf("base schedule/timezone not projected: schedule=%q timezone=%q", m.Schedule.ValueString(), m.Timezone.ValueString())
 	}
+	if m.RetryPolicy.ValueString() != "aggressive-retry" {
+		t.Errorf("base retry_policy not projected: %q", m.RetryPolicy.ValueString())
+	}
 	if m.Configuration == nil || m.Configuration.URL.ValueString() != "https://x.test" {
 		t.Errorf("configuration: %+v", m.Configuration)
 	}
@@ -273,6 +293,9 @@ func TestApplyJobToModel(t *testing.T) {
 	if prod.Timezone.ValueString() != "America/New_York" {
 		t.Errorf("production per-env timezone not projected: %q", prod.Timezone.ValueString())
 	}
+	if prod.RetryPolicy.ValueString() != "prod-retry" {
+		t.Errorf("production per-env retry_policy not projected: %q", prod.RetryPolicy.ValueString())
+	}
 	if prod.NextRunAt.ValueString() != "2026-07-01T02:00:00Z" {
 		t.Errorf("production per-env next_run_at not projected: %q", prod.NextRunAt.ValueString())
 	}
@@ -287,6 +310,9 @@ func TestApplyJobToModel(t *testing.T) {
 	}
 	if !stg.Timezone.IsNull() {
 		t.Errorf("staging timezone should be null when unset, got %q", stg.Timezone.ValueString())
+	}
+	if !stg.RetryPolicy.IsNull() {
+		t.Errorf("staging retry_policy should be null when unset, got %q", stg.RetryPolicy.ValueString())
 	}
 	if !stg.NextRunAt.IsNull() {
 		t.Errorf("staging next_run_at should be null when unset, got %q", stg.NextRunAt.ValueString())

@@ -56,7 +56,8 @@ type jobHeader struct {
 // `enabled` toggles whether the job runs in this environment (the base
 // `enabled` is a read-only roll-up the server derives, so enablement lives
 // entirely here); `schedule` is an optional per-environment cron override
-// that varies the cadence for just this environment; `configuration` is an
+// that varies the cadence for just this environment; `retry_policy` is an
+// optional per-environment retry-policy override; `configuration` is an
 // optional per-environment override that fully replaces the base
 // configuration in that environment — omit it to inherit the base.
 // `next_run_at` is the read-only next fire time in this environment.
@@ -64,6 +65,7 @@ type jobEnvOverride struct {
 	Enabled       types.Bool             `tfsdk:"enabled"`
 	Schedule      types.String           `tfsdk:"schedule"`
 	Timezone      types.String           `tfsdk:"timezone"`
+	RetryPolicy   types.String           `tfsdk:"retry_policy"`
 	Configuration *jobConfigurationModel `tfsdk:"configuration"`
 	NextRunAt     types.String           `tfsdk:"next_run_at"`
 }
@@ -77,6 +79,7 @@ type jobResourceModel struct {
 	Type              types.String              `tfsdk:"type"`
 	Schedule          types.String              `tfsdk:"schedule"`
 	Timezone          types.String              `tfsdk:"timezone"`
+	RetryPolicy       types.String              `tfsdk:"retry_policy"`
 	ConcurrencyPolicy types.String              `tfsdk:"concurrency_policy"`
 	Environments      map[string]jobEnvOverride `tfsdk:"environments"`
 	Configuration     *jobConfigurationModel    `tfsdk:"configuration"`
@@ -142,6 +145,12 @@ func (r *jobResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *
 					"Applies to recurring jobs only; ignored for one-off and manual jobs. Omit it to evaluate " +
 					"the cron in UTC.",
 			},
+			"retry_policy": schema.StringAttribute{
+				Optional: true,
+				Description: "Base retry policy for failed runs — the `id` of a `smplkit_retry_policy` " +
+					"(or the built-in `Default`, which never retries), overridable per environment via the " +
+					"`environments` map. Omit it to inherit the built-in `Default` policy.",
+			},
 			"concurrency_policy": schema.StringAttribute{
 				Optional: true,
 				Computed: true,
@@ -155,9 +164,10 @@ func (r *jobResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *
 				Description: "Per-environment overrides keyed by environment id (e.g. `production`). " +
 					"A recurring job fires in an environment only when that environment's entry sets " +
 					"`enabled = true`; an environment with no entry does not run there. Each entry may " +
-					"also carry a `schedule` cron override, a `timezone` override, and a `configuration` " +
-					"override that fully replaces the base `configuration` in that environment. Every " +
-					"referenced environment must already exist for the account.",
+					"also carry a `schedule` cron override, a `timezone` override, a `retry_policy` " +
+					"override, and a `configuration` override that fully replaces the base " +
+					"`configuration` in that environment. Every referenced environment must already " +
+					"exist for the account.",
 				NestedObject: schema.NestedAttributeObject{
 					Attributes: map[string]schema.Attribute{
 						"enabled": schema.BoolAttribute{
@@ -177,6 +187,12 @@ func (r *jobResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *
 								"that varies the zone the cron is evaluated in for just this environment " +
 								"(recurring jobs only). Omit to inherit the job's base `timezone` (or UTC when " +
 								"the base is unset).",
+						},
+						"retry_policy": schema.StringAttribute{
+							Optional: true,
+							Description: "Optional per-environment retry-policy override — the `id` of a " +
+								"`smplkit_retry_policy` (or `Default`) applied to runs in just this " +
+								"environment. Omit to inherit the job's base `retry_policy`.",
 						},
 						"configuration": jobConfigurationSchemaAttribute(false,
 							"Optional per-environment HTTP request configuration that fully replaces the base "+
@@ -358,6 +374,7 @@ func (r *jobResource) Update(ctx context.Context, req resource.UpdateRequest, re
 	job.Environments = jobEnvironmentsFromModel(plan.Environments)
 	job.Schedule = plan.Schedule.ValueString()
 	job.Timezone = plan.Timezone.ValueString()
+	job.RetryPolicy = plan.RetryPolicy.ValueString()
 	if !plan.ConcurrencyPolicy.IsNull() && !plan.ConcurrencyPolicy.IsUnknown() && plan.ConcurrencyPolicy.ValueString() != "" {
 		job.ConcurrencyPolicy = plan.ConcurrencyPolicy.ValueString()
 	}
@@ -445,6 +462,9 @@ func buildJobOptions(data *jobResourceModel) []smplkit.JobOption {
 	if !data.Description.IsNull() && !data.Description.IsUnknown() {
 		opts = append(opts, smplkit.WithJobDescription(data.Description.ValueString()))
 	}
+	if isKnown(data.RetryPolicy) && data.RetryPolicy.ValueString() != "" {
+		opts = append(opts, smplkit.WithJobRetryPolicy(data.RetryPolicy.ValueString()))
+	}
 	if !data.ConcurrencyPolicy.IsNull() && !data.ConcurrencyPolicy.IsUnknown() && data.ConcurrencyPolicy.ValueString() != "" {
 		opts = append(opts, smplkit.WithJobConcurrencyPolicy(data.ConcurrencyPolicy.ValueString()))
 	}
@@ -471,6 +491,9 @@ func jobEnvironmentsFromModel(envs map[string]jobEnvOverride) map[string]smplkit
 		}
 		if isKnown(override.Timezone) && override.Timezone.ValueString() != "" {
 			je.Timezone = override.Timezone.ValueString()
+		}
+		if isKnown(override.RetryPolicy) && override.RetryPolicy.ValueString() != "" {
+			je.RetryPolicy = override.RetryPolicy.ValueString()
 		}
 		if override.Configuration != nil {
 			cfg := jobHTTPConfigFromModel(override.Configuration)
@@ -542,6 +565,10 @@ func applyJobToModel(job *smplkit.Job, model *jobResourceModel) {
 	// which must map to null so it round-trips against an omitted (null)
 	// timezone in config rather than reporting null -> "".
 	model.Timezone = emptyStringToNull(job.Timezone)
+	// `retry_policy` is Optional and settable; the server returns "" when unset,
+	// which must map to null so it round-trips against an omitted (null)
+	// retry_policy in config rather than reporting null -> "".
+	model.RetryPolicy = emptyStringToNull(job.RetryPolicy)
 	model.ConcurrencyPolicy = types.StringValue(job.ConcurrencyPolicy)
 	if len(job.Environments) == 0 {
 		model.Environments = nil
@@ -549,10 +576,11 @@ func applyJobToModel(job *smplkit.Job, model *jobResourceModel) {
 		envs := make(map[string]jobEnvOverride, len(job.Environments))
 		for env, override := range job.Environments {
 			eo := jobEnvOverride{
-				Enabled:   types.BoolValue(override.Enabled),
-				Schedule:  emptyStringToNull(override.Schedule),
-				Timezone:  emptyStringToNull(override.Timezone),
-				NextRunAt: timePointerToString(override.NextRunAt),
+				Enabled:     types.BoolValue(override.Enabled),
+				Schedule:    emptyStringToNull(override.Schedule),
+				Timezone:    emptyStringToNull(override.Timezone),
+				RetryPolicy: emptyStringToNull(override.RetryPolicy),
+				NextRunAt:   timePointerToString(override.NextRunAt),
 			}
 			if override.Configuration != nil {
 				eo.Configuration = jobConfigurationModelFromHTTP(*override.Configuration)

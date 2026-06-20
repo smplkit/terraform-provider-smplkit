@@ -18,6 +18,17 @@ variable "cache_warm_token" {
   sensitive = true
 }
 
+resource "smplkit_retry_policy" "cache_warm_retry" {
+  id            = "cache-warm-retry"
+  name          = "Cache warm retry"
+  max_retries   = 3
+  backoff       = "exponential"
+  delay_seconds = 5
+  retry_on = {
+    reasons = ["CONNECTION_ERROR", "TIMEOUT"]
+  }
+}
+
 resource "smplkit_job" "nightly_cache_warm" {
   id          = "nightly-cache-warm"
   name        = "Nightly cache warm"
@@ -30,6 +41,11 @@ resource "smplkit_job" "nightly_cache_warm" {
   # IANA timezone the cron is evaluated in (recurring jobs only). Omit
   # for UTC.
   timezone = "America/New_York"
+
+  # Base retry policy for failed runs — the id of a smplkit_retry_policy
+  # (or the built-in "Default", which never retries). Overridable per
+  # environment via the environments map.
+  retry_policy = smplkit_retry_policy.cache_warm_retry.id
 
   configuration = {
     url            = "https://api.example.com/cache/warm"
@@ -65,7 +81,8 @@ resource "smplkit_job" "nightly_cache_warm" {
 
 - `concurrency_policy` (String) How overlapping runs are handled. `ALLOW` (the default and only value today) permits a new run to start while a previous one is still in flight.
 - `description` (String) Optional free-text description.
-- `environments` (Attributes Map) Per-environment overrides keyed by environment id (e.g. `production`). A recurring job fires in an environment only when that environment's entry sets `enabled = true`; an environment with no entry does not run there. Each entry may also carry a `schedule` cron override, a `timezone` override, and a `configuration` override that fully replaces the base `configuration` in that environment. Every referenced environment must already exist for the account. (see [below for nested schema](#nestedatt--environments))
+- `environments` (Attributes Map) Per-environment overrides keyed by environment id (e.g. `production`). A recurring job fires in an environment only when that environment's entry sets `enabled = true`; an environment with no entry does not run there. Each entry may also carry a `schedule` cron override, a `timezone` override, a `retry_policy` override, and a `configuration` override that fully replaces the base `configuration` in that environment. Every referenced environment must already exist for the account. (see [below for nested schema](#nestedatt--environments))
+- `retry_policy` (String) Base retry policy for failed runs — the `id` of a `smplkit_retry_policy` (or the built-in `Default`, which never retries), overridable per environment via the `environments` map. Omit it to inherit the built-in `Default` policy.
 - `schedule` (String) When the job runs: a 5-field cron expression evaluated in UTC (a recurring job), an ISO-8601 datetime (a one-off run at that instant), or the literal `now` (run once, as soon as possible). Omit it (or set it empty) for a manual job that never auto-fires and runs only when triggered. A datetime or `now` job disables itself after it fires.
 - `timezone` (String) IANA timezone name (e.g. `America/New_York`) the cron `schedule` is evaluated in. Applies to recurring jobs only; ignored for one-off and manual jobs. Omit it to evaluate the cron in UTC.
 
@@ -112,6 +129,7 @@ Optional:
 
 - `configuration` (Attributes) Optional per-environment HTTP request configuration that fully replaces the base `configuration` in this environment. Omit to inherit the base configuration. (see [below for nested schema](#nestedatt--environments--configuration))
 - `enabled` (Boolean) Whether the job runs in this environment. Defaults to `false`.
+- `retry_policy` (String) Optional per-environment retry-policy override — the `id` of a `smplkit_retry_policy` (or `Default`) applied to runs in just this environment. Omit to inherit the job's base `retry_policy`.
 - `schedule` (String) Optional per-environment cron override that varies the cadence for just this environment (recurring jobs only). A 5-field cron expression evaluated in UTC. Omit to inherit the job's base `schedule`; it cannot turn a one-off job recurring or vice-versa.
 - `timezone` (String) Optional per-environment IANA timezone override (e.g. `America/New_York`) that varies the zone the cron is evaluated in for just this environment (recurring jobs only). Omit to inherit the job's base `timezone` (or UTC when the base is unset).
 

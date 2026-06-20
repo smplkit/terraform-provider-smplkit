@@ -47,7 +47,7 @@ func (p *SmplkitProvider) Metadata(_ context.Context, _ provider.MetadataRequest
 // Schema describes the provider configuration block.
 func (p *SmplkitProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp *provider.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		Description: "Manages smplkit platform resources (configurations, flags, audit forwarders, log groups, environments, services, scheduled jobs) " +
+		Description: "Manages smplkit platform resources (configurations, flags, audit forwarders, log groups, environments, services, scheduled jobs, retry policies) " +
 			"through the smplkit management API. The provider takes a normal dependency on the public Go SDK and calls only " +
 			"the management client — no hand-rolled HTTP, no auto-registration side effects.",
 		Attributes: map[string]schema.Attribute{
@@ -130,6 +130,7 @@ func (p *SmplkitProvider) Resources(_ context.Context) []func() resource.Resourc
 		NewEnvironmentResource,
 		NewServiceResource,
 		NewJobResource,
+		NewRetryPolicyResource,
 	}
 }
 
@@ -143,6 +144,7 @@ func (p *SmplkitProvider) DataSources(_ context.Context) []func() datasource.Dat
 		NewEnvironmentDataSource,
 		NewServiceDataSource,
 		NewJobDataSource,
+		NewRetryPolicyDataSource,
 	}
 }
 

@@ -3,6 +3,17 @@ variable "cache_warm_token" {
   sensitive = true
 }
 
+resource "smplkit_retry_policy" "cache_warm_retry" {
+  id            = "cache-warm-retry"
+  name          = "Cache warm retry"
+  max_retries   = 3
+  backoff       = "exponential"
+  delay_seconds = 5
+  retry_on = {
+    reasons = ["CONNECTION_ERROR", "TIMEOUT"]
+  }
+}
+
 resource "smplkit_job" "nightly_cache_warm" {
   id          = "nightly-cache-warm"
   name        = "Nightly cache warm"
@@ -15,6 +26,11 @@ resource "smplkit_job" "nightly_cache_warm" {
   # IANA timezone the cron is evaluated in (recurring jobs only). Omit
   # for UTC.
   timezone = "America/New_York"
+
+  # Base retry policy for failed runs — the id of a smplkit_retry_policy
+  # (or the built-in "Default", which never retries). Overridable per
+  # environment via the environments map.
+  retry_policy = smplkit_retry_policy.cache_warm_retry.id
 
   configuration = {
     url            = "https://api.example.com/cache/warm"

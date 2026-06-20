@@ -658,6 +658,147 @@ resource "smplkit_job" "test" {
 	})
 }
 
+// ─── smplkit_retry_policy ──────────────────────────────────────────────────
+
+// TestAccRetryPolicyResource_basicAndUpdate covers a retry-policy lifecycle:
+// create an exponential policy with a status/reason retry-on set, update its
+// scalars and retry-on, then import-verify. Retry policies are account-global,
+// so no environment setup is needed.
+func TestAccRetryPolicyResource_basicAndUpdate(t *testing.T) {
+	id := fmt.Sprintf("tfacc-rp-%d", time.Now().UnixNano())
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: testProviderConfig() + fmt.Sprintf(`
+resource "smplkit_retry_policy" "test" {
+  id                = %[1]q
+  name              = "Acc Retry Policy"
+  max_retries       = 3
+  backoff           = "exponential"
+  delay_seconds     = 2
+  max_delay_seconds = 60
+
+  retry_on = {
+    statuses = [429, 503]
+    reasons  = ["CONNECTION_ERROR", "TIMEOUT"]
+  }
+}
+`, id),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("smplkit_retry_policy.test", "id", id),
+					resource.TestCheckResourceAttr("smplkit_retry_policy.test", "max_retries", "3"),
+					resource.TestCheckResourceAttr("smplkit_retry_policy.test", "backoff", "exponential"),
+					resource.TestCheckResourceAttr("smplkit_retry_policy.test", "delay_seconds", "2"),
+					resource.TestCheckResourceAttr("smplkit_retry_policy.test", "max_delay_seconds", "60"),
+					resource.TestCheckResourceAttr("smplkit_retry_policy.test", "retry_on.statuses.#", "2"),
+					resource.TestCheckResourceAttr("smplkit_retry_policy.test", "retry_on.statuses.0", "429"),
+					resource.TestCheckResourceAttr("smplkit_retry_policy.test", "retry_on.reasons.#", "2"),
+					resource.TestCheckResourceAttrSet("smplkit_retry_policy.test", "created_at"),
+					resource.TestCheckResourceAttrSet("smplkit_retry_policy.test", "version"),
+				),
+			},
+			{
+				// Update: switch to fixed backoff (drop max_delay_seconds),
+				// bump the retry count, and narrow the retry-on set.
+				Config: testProviderConfig() + fmt.Sprintf(`
+resource "smplkit_retry_policy" "test" {
+  id            = %[1]q
+  name          = "Acc Retry Policy v2"
+  max_retries   = 5
+  backoff       = "fixed"
+  delay_seconds = 10
+
+  retry_on = {
+    reasons = ["TIMEOUT"]
+  }
+}
+`, id),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("smplkit_retry_policy.test", "name", "Acc Retry Policy v2"),
+					resource.TestCheckResourceAttr("smplkit_retry_policy.test", "max_retries", "5"),
+					resource.TestCheckResourceAttr("smplkit_retry_policy.test", "backoff", "fixed"),
+					resource.TestCheckResourceAttr("smplkit_retry_policy.test", "delay_seconds", "10"),
+					resource.TestCheckNoResourceAttr("smplkit_retry_policy.test", "max_delay_seconds"),
+					resource.TestCheckResourceAttr("smplkit_retry_policy.test", "retry_on.reasons.#", "1"),
+					resource.TestCheckResourceAttr("smplkit_retry_policy.test", "retry_on.reasons.0", "TIMEOUT"),
+				),
+			},
+			{
+				ResourceName:      "smplkit_retry_policy.test",
+				ImportState:       true,
+				ImportStateVerify: true,
+			},
+		},
+	})
+}
+
+// TestAccJobResource_withRetryPolicy covers wiring a retry policy onto a job —
+// a base `retry_policy` and a per-environment override — created in the same
+// apply as the policy it references. Mirrors how the timezone assertions in
+// TestAccJobResource_basicAndUpdate are written.
+func TestAccJobResource_withRetryPolicy(t *testing.T) {
+	jobID := fmt.Sprintf("tfacc-job-rp-%d", time.Now().UnixNano())
+	baseRP := fmt.Sprintf("tfacc-job-rp-base-%d", time.Now().UnixNano())
+	envRP := fmt.Sprintf("tfacc-job-rp-env-%d", time.Now().UnixNano())
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				// The cron is intentionally rare (Jan 1) so the scheduler
+				// won't fire it and shift next_run_at mid-test. production is
+				// the stable, system-protected managed environment.
+				Config: testProviderConfig() + fmt.Sprintf(`
+resource "smplkit_retry_policy" "base" {
+  id            = %[2]q
+  name          = "Base policy"
+  max_retries   = 3
+  backoff       = "exponential"
+  delay_seconds = 2
+}
+
+resource "smplkit_retry_policy" "env" {
+  id            = %[3]q
+  name          = "Env policy"
+  max_retries   = 1
+  backoff       = "fixed"
+  delay_seconds = 5
+}
+
+resource "smplkit_job" "test" {
+  id           = %[1]q
+  name         = "Acc Job with retry policy"
+  schedule     = "0 0 1 1 *"
+  retry_policy = smplkit_retry_policy.base.id
+
+  environments = {
+    production = {
+      enabled      = false
+      retry_policy = smplkit_retry_policy.env.id
+    }
+  }
+
+  configuration = {
+    url = "https://example.com/run"
+  }
+}
+`, jobID, baseRP, envRP),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("smplkit_job.test", "retry_policy", baseRP),
+					resource.TestCheckResourceAttr("smplkit_job.test", "environments.production.retry_policy", envRP),
+				),
+			},
+			{
+				ResourceName:      "smplkit_job.test",
+				ImportState:       true,
+				ImportStateVerify: true,
+			},
+		},
+	})
+}
+
 // testProviderConfig returns a small Terraform block that pins the
 // provider to whatever SMPLKIT_API_URL the test harness picked. The
 // acceptance harness passes SMPLKIT_API_KEY through the environment, so

@@ -508,6 +508,8 @@ func (d *jobDataSource) Schema(_ context.Context, _ datasource.SchemaRequest, re
 			"kind":               dsschema.StringAttribute{Computed: true, Description: "How the job runs, derived from its base `schedule`: `recurring` (cron), `manual` (no schedule, runs only when triggered), or `one_off` (a datetime / `now` schedule)."},
 			"type":               dsschema.StringAttribute{Computed: true, Description: "Job type (currently always `http`)."},
 			"schedule":           dsschema.StringAttribute{Computed: true, Description: "Cron expression, ISO-8601 datetime, or `now`."},
+			"timezone":           dsschema.StringAttribute{Computed: true, Description: "IANA timezone the cron `schedule` is evaluated in (recurring jobs only), or null when the job inherits UTC."},
+			"retry_policy":       dsschema.StringAttribute{Computed: true, Description: "Base retry-policy id for failed runs, or null when the job inherits the built-in `Default` policy."},
 			"concurrency_policy": dsschema.StringAttribute{Computed: true, Description: "How overlapping runs are handled (currently always `ALLOW`)."},
 			"environments": dsschema.MapNestedAttribute{
 				Computed: true,
@@ -517,6 +519,8 @@ func (d *jobDataSource) Schema(_ context.Context, _ datasource.SchemaRequest, re
 					Attributes: map[string]dsschema.Attribute{
 						"enabled":       dsschema.BoolAttribute{Computed: true, Description: "Whether the job runs in this environment."},
 						"schedule":      dsschema.StringAttribute{Computed: true, Description: "Per-environment cron override, or null when the environment inherits the job's base schedule."},
+						"timezone":      dsschema.StringAttribute{Computed: true, Description: "Per-environment timezone override, or null when the environment inherits the job's base timezone."},
+						"retry_policy":  dsschema.StringAttribute{Computed: true, Description: "Per-environment retry-policy override, or null when the environment inherits the job's base retry policy."},
 						"configuration": jobConfigurationDataSourceAttribute("Per-environment HTTP request configuration override."),
 						"next_run_at":   dsschema.StringAttribute{Computed: true, Description: "RFC3339 timestamp of the next scheduled fire time in this environment."},
 					},
@@ -554,5 +558,81 @@ func (d *jobDataSource) Read(ctx context.Context, req datasource.ReadRequest, re
 		return
 	}
 	applyJobToModel(job, &data)
+	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
+}
+
+// ───── smplkit_retry_policy ─────────────────────────────────────────────────
+
+// NewRetryPolicyDataSource returns the read-only data source for retry policies.
+func NewRetryPolicyDataSource() datasource.DataSource {
+	return &retryPolicyDataSource{}
+}
+
+type retryPolicyDataSource struct {
+	client *smplkit.SmplClient
+}
+
+func (d *retryPolicyDataSource) Metadata(_ context.Context, req datasource.MetadataRequest, resp *datasource.MetadataResponse) {
+	resp.TypeName = req.ProviderTypeName + "_retry_policy"
+}
+
+func (d *retryPolicyDataSource) Schema(_ context.Context, _ datasource.SchemaRequest, resp *datasource.SchemaResponse) {
+	resp.Schema = dsschema.Schema{
+		Description: "Read a smplkit retry policy by id. Retry policies are account-global — never " +
+			"environment-scoped.",
+		Attributes: map[string]dsschema.Attribute{
+			"id":                dsschema.StringAttribute{Required: true, Description: "The retry-policy key."},
+			"name":              dsschema.StringAttribute{Computed: true, Description: "Display name."},
+			"max_retries":       dsschema.Int64Attribute{Computed: true, Description: "How many times a failed run is retried after the initial attempt (`0` disables retries; maximum 10)."},
+			"backoff":           dsschema.StringAttribute{Computed: true, Description: "How the wait between retries grows: `exponential` or `fixed`."},
+			"delay_seconds":     dsschema.Int64Attribute{Computed: true, Description: "The wait before a retry, in seconds."},
+			"max_delay_seconds": dsschema.Int64Attribute{Computed: true, Description: "Ceiling on the wait between retries (exponential backoff only), or null when uncapped."},
+			"retry_on": dsschema.SingleNestedAttribute{
+				Computed:    true,
+				Description: "Which failures the policy retries, or null when it retries nothing.",
+				Attributes: map[string]dsschema.Attribute{
+					"statuses": dsschema.ListAttribute{
+						Computed:    true,
+						ElementType: types.Int64Type,
+						Description: "Response status codes the policy retries on.",
+					},
+					"reasons": dsschema.ListAttribute{
+						Computed:    true,
+						ElementType: types.StringType,
+						Description: "Failure categories the policy retries on (`CONNECTION_ERROR`, `NON_SUCCESS_STATUS`, `TIMEOUT`).",
+					},
+				},
+			},
+			"created_at": dsschema.StringAttribute{Computed: true, Description: "RFC3339 creation timestamp."},
+			"updated_at": dsschema.StringAttribute{Computed: true, Description: "RFC3339 last-modified timestamp."},
+			"version":    dsschema.Int64Attribute{Computed: true, Description: "Monotonic version counter."},
+		},
+	}
+}
+
+func (d *retryPolicyDataSource) Configure(_ context.Context, req datasource.ConfigureRequest, resp *datasource.ConfigureResponse) {
+	if req.ProviderData == nil {
+		return
+	}
+	c, ok := req.ProviderData.(*smplkit.SmplClient)
+	if !ok {
+		resp.Diagnostics.AddError("Unexpected provider data type", fmt.Sprintf("Expected *smplkit.SmplClient, got %T", req.ProviderData))
+		return
+	}
+	d.client = c
+}
+
+func (d *retryPolicyDataSource) Read(ctx context.Context, req datasource.ReadRequest, resp *datasource.ReadResponse) {
+	var data retryPolicyResourceModel
+	resp.Diagnostics.Append(req.Config.Get(ctx, &data)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	policy, err := d.client.Jobs().RetryPolicies().Get(ctx, data.ID.ValueString())
+	if err != nil {
+		addSDKErrorDiagnostic(&resp.Diagnostics, fmt.Sprintf("reading smplkit_retry_policy data source %q", data.ID.ValueString()), err)
+		return
+	}
+	applyRetryPolicyToModel(policy, &data)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }

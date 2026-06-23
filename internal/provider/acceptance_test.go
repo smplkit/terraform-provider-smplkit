@@ -661,9 +661,9 @@ resource "smplkit_job" "test" {
 // ─── smplkit_retry_policy ──────────────────────────────────────────────────
 
 // TestAccRetryPolicyResource_basicAndUpdate covers a retry-policy lifecycle:
-// create an exponential policy with a status/reason retry-on set, update its
-// scalars and retry-on, then import-verify. Retry policies are account-global,
-// so no environment setup is needed.
+// create an exponential policy with status patterns plus the two retry
+// conditions, update its scalars and narrow the conditions, then import-verify.
+// Retry policies are account-global, so no environment setup is needed.
 func TestAccRetryPolicyResource_basicAndUpdate(t *testing.T) {
 	id := fmt.Sprintf("tfacc-rp-%d", time.Now().UnixNano())
 	resource.Test(t, resource.TestCase{
@@ -680,10 +680,10 @@ resource "smplkit_retry_policy" "test" {
   delay_seconds     = 2
   max_delay_seconds = 60
 
-  retry_on = {
-    statuses = [429, 503]
-    reasons  = ["CONNECTION_ERROR", "TIMEOUT"]
-  }
+  retry_statuses            = ["429", "5xx"]
+  retry_statuses_except     = ["501"]
+  retry_on_timeout          = true
+  retry_on_connection_error = true
 }
 `, id),
 				Check: resource.ComposeAggregateTestCheckFunc(
@@ -692,16 +692,22 @@ resource "smplkit_retry_policy" "test" {
 					resource.TestCheckResourceAttr("smplkit_retry_policy.test", "backoff", "exponential"),
 					resource.TestCheckResourceAttr("smplkit_retry_policy.test", "delay_seconds", "2"),
 					resource.TestCheckResourceAttr("smplkit_retry_policy.test", "max_delay_seconds", "60"),
-					resource.TestCheckResourceAttr("smplkit_retry_policy.test", "retry_on.statuses.#", "2"),
-					resource.TestCheckResourceAttr("smplkit_retry_policy.test", "retry_on.statuses.0", "429"),
-					resource.TestCheckResourceAttr("smplkit_retry_policy.test", "retry_on.reasons.#", "2"),
+					resource.TestCheckResourceAttr("smplkit_retry_policy.test", "retry_statuses.#", "2"),
+					resource.TestCheckResourceAttr("smplkit_retry_policy.test", "retry_statuses.0", "429"),
+					resource.TestCheckResourceAttr("smplkit_retry_policy.test", "retry_statuses.1", "5xx"),
+					resource.TestCheckResourceAttr("smplkit_retry_policy.test", "retry_statuses_except.#", "1"),
+					resource.TestCheckResourceAttr("smplkit_retry_policy.test", "retry_statuses_except.0", "501"),
+					resource.TestCheckResourceAttr("smplkit_retry_policy.test", "retry_on_timeout", "true"),
+					resource.TestCheckResourceAttr("smplkit_retry_policy.test", "retry_on_connection_error", "true"),
 					resource.TestCheckResourceAttrSet("smplkit_retry_policy.test", "created_at"),
 					resource.TestCheckResourceAttrSet("smplkit_retry_policy.test", "version"),
 				),
 			},
 			{
 				// Update: switch to fixed backoff (drop max_delay_seconds),
-				// bump the retry count, and narrow the retry-on set.
+				// bump the retry count, and narrow the retry conditions to just
+				// the timeout boolean (clearing the status lists and the
+				// connection-error boolean).
 				Config: testProviderConfig() + fmt.Sprintf(`
 resource "smplkit_retry_policy" "test" {
   id            = %[1]q
@@ -710,9 +716,7 @@ resource "smplkit_retry_policy" "test" {
   backoff       = "fixed"
   delay_seconds = 10
 
-  retry_on = {
-    reasons = ["TIMEOUT"]
-  }
+  retry_on_timeout = true
 }
 `, id),
 				Check: resource.ComposeAggregateTestCheckFunc(
@@ -721,8 +725,9 @@ resource "smplkit_retry_policy" "test" {
 					resource.TestCheckResourceAttr("smplkit_retry_policy.test", "backoff", "fixed"),
 					resource.TestCheckResourceAttr("smplkit_retry_policy.test", "delay_seconds", "10"),
 					resource.TestCheckNoResourceAttr("smplkit_retry_policy.test", "max_delay_seconds"),
-					resource.TestCheckResourceAttr("smplkit_retry_policy.test", "retry_on.reasons.#", "1"),
-					resource.TestCheckResourceAttr("smplkit_retry_policy.test", "retry_on.reasons.0", "TIMEOUT"),
+					resource.TestCheckResourceAttr("smplkit_retry_policy.test", "retry_on_timeout", "true"),
+					resource.TestCheckResourceAttr("smplkit_retry_policy.test", "retry_on_connection_error", "false"),
+					resource.TestCheckResourceAttr("smplkit_retry_policy.test", "retry_statuses.#", "0"),
 				),
 			},
 			{

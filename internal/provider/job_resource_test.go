@@ -44,7 +44,7 @@ func TestJobHTTPConfigFromModel_FullValues(t *testing.T) {
 	if cfg.CaCert == nil || *cfg.CaCert != "-----BEGIN CERT-----" {
 		t.Errorf("ca_cert: %v", cfg.CaCert)
 	}
-	if len(cfg.Headers) != 1 || cfg.Headers[0].Name != "Authorization" || cfg.Headers[0].Value != "Bearer x" {
+	if len(cfg.Headers) != 1 || cfg.Headers["Authorization"] != "Bearer x" {
 		t.Errorf("headers: %+v", cfg.Headers)
 	}
 }
@@ -122,7 +122,7 @@ func TestJobConfigurationModelFromHTTP_PreservesConcreteValues(t *testing.T) {
 		Body:          &body,
 		TlsVerify:     &tlsOff,
 		CaCert:        &ca,
-		Headers:       []smplkit.HttpHeader{{Name: "A", Value: "b"}},
+		Headers:       map[string]string{"A": "b"},
 	})
 	if cfg.Method.ValueString() != "GET" || cfg.SuccessStatus.ValueString() != "5xx" || cfg.Timeout.ValueInt64() != 10 {
 		t.Errorf("scalars not preserved: %+v", cfg)
@@ -213,10 +213,12 @@ func TestJobEnvironmentsFromModel(t *testing.T) {
 	if envs["production"].RetryPolicy != "aggressive-retry" {
 		t.Errorf("production per-env retry_policy override not converted: %q", envs["production"].RetryPolicy)
 	}
-	if cfg := envs["production"].Configuration; cfg == nil || cfg.URL != "https://prod.test" {
-		t.Errorf("production config override not converted: %+v", cfg)
+	// Per-environment overrides are flat leaves since ADR-056; the nested config
+	// model flattens onto the environment's URL leaf.
+	if envs["production"].URL != "https://prod.test" {
+		t.Errorf("production config override not converted: %+v", envs["production"])
 	}
-	if envs["staging"].Enabled || envs["staging"].Configuration != nil {
+	if envs["staging"].Enabled || envs["staging"].URL != "" {
 		t.Errorf("staging should be disabled with no override: %+v", envs["staging"])
 	}
 	if envs["staging"].Schedule != "" {
@@ -242,21 +244,20 @@ func TestApplyJobToModel(t *testing.T) {
 		ID:                "nightly",
 		Name:              "Nightly",
 		Description:       &desc,
-		Enabled:           true,
 		Kind:              &kind,
 		Type:              "http",
 		Schedule:          "0 2 * * *",
 		Timezone:          "Europe/London",
 		RetryPolicy:       "aggressive-retry",
 		ConcurrencyPolicy: "ALLOW",
-		Environments: map[string]smplkit.JobEnvironment{
+		Environments: map[string]*smplkit.JobEnvironment{
 			"production": {
-				Enabled:       true,
-				Schedule:      "*/15 * * * *",
-				Timezone:      "America/New_York",
-				RetryPolicy:   "prod-retry",
-				Configuration: &smplkit.HttpConfig{URL: "https://prod.test"},
-				NextRunAt:     &nextRun,
+				Enabled:     true,
+				Schedule:    "*/15 * * * *",
+				Timezone:    "America/New_York",
+				RetryPolicy: "prod-retry",
+				URL:         "https://prod.test",
+				NextRunAt:   &nextRun,
 			},
 			"staging": {Enabled: false},
 		},

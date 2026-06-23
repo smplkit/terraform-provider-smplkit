@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -165,14 +166,17 @@ func (r *jobResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *
 					"A recurring job fires in an environment only when that environment's entry sets " +
 					"`enabled = true`; an environment with no entry does not run there. Each entry may " +
 					"also carry a `schedule` cron override, a `timezone` override, a `retry_policy` " +
-					"override, and a `configuration` override that fully replaces the base " +
-					"`configuration` in that environment. Every referenced environment must already " +
-					"exist for the account.",
+					"override, and a `configuration` override of one or more leaves (URL, method, " +
+					"headers, …); each leaf set overrides just that leaf, the rest inheriting the base " +
+					"`configuration`. Every referenced environment must already exist for the account.",
 				NestedObject: schema.NestedAttributeObject{
 					Attributes: map[string]schema.Attribute{
 						"enabled": schema.BoolAttribute{
-							Optional:    true,
-							Description: "Whether the job runs in this environment. Defaults to `false`.",
+							Optional: true,
+							Computed: true,
+							Description: "Whether the job runs in this environment. Defaults to `false`. Omit it on " +
+								"an override that sets only `schedule`/`timezone`/`retry_policy`/`configuration` to " +
+								"leave the job disabled in that environment.",
 						},
 						"schedule": schema.StringAttribute{
 							Optional: true,
@@ -195,8 +199,9 @@ func (r *jobResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *
 								"environment. Omit to inherit the job's base `retry_policy`.",
 						},
 						"configuration": jobConfigurationSchemaAttribute(false,
-							"Optional per-environment HTTP request configuration that fully replaces the base "+
-								"`configuration` in this environment. Omit to inherit the base configuration."),
+							"Optional per-environment HTTP request override. Each leaf you set (URL, method, "+
+								"headers, body, …) overrides just that leaf for this environment; leaves you omit "+
+								"inherit the base `configuration`."),
 						"next_run_at": schema.StringAttribute{
 							Computed: true,
 							Description: "RFC3339 timestamp of the next scheduled fire time in this environment. " +
@@ -324,7 +329,9 @@ func (r *jobResource) Create(ctx context.Context, req resource.CreateRequest, re
 		return
 	}
 
+	plan := data
 	applyJobToModel(job, &data)
+	reconcileJobHeaderOrder(&plan, &data)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
 
@@ -345,7 +352,9 @@ func (r *jobResource) Read(ctx context.Context, req resource.ReadRequest, resp *
 		return
 	}
 
+	prior := data
 	applyJobToModel(job, &data)
+	reconcileJobHeaderOrder(&prior, &data)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
 
@@ -371,7 +380,7 @@ func (r *jobResource) Update(ctx context.Context, req resource.UpdateRequest, re
 	// Full-replace the per-environment override map with the plan's. A nil
 	// map clears enablement everywhere (the base `enabled` is a read-only
 	// roll-up the server derives).
-	job.Environments = jobEnvironmentsFromModel(plan.Environments)
+	job.Environments = jobEnvPointerMap(jobEnvironmentsFromModel(plan.Environments))
 	job.Schedule = plan.Schedule.ValueString()
 	job.Timezone = plan.Timezone.ValueString()
 	job.RetryPolicy = plan.RetryPolicy.ValueString()
@@ -385,7 +394,9 @@ func (r *jobResource) Update(ctx context.Context, req resource.UpdateRequest, re
 		return
 	}
 
+	planSnapshot := plan
 	applyJobToModel(job, &plan)
+	reconcileJobHeaderOrder(&planSnapshot, &plan)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
@@ -445,7 +456,10 @@ func (r *jobResource) newJobFromSchedule(data *jobResourceModel, configuration s
 	// timezone directly when supplied; leave it empty (server-default UTC)
 	// otherwise. The post-Save read writes the server-authoritative value back.
 	if isKnown(data.Timezone) && data.Timezone.ValueString() != "" {
-		job.SetTimezone(data.Timezone.ValueString())
+		// The SetTimezone(env) accessor was removed in the ADR-056 reshape; set
+		// the base timezone field directly. The post-Save read writes back the
+		// server-authoritative value.
+		job.Timezone = data.Timezone.ValueString()
 	}
 	return job
 }
@@ -495,11 +509,37 @@ func jobEnvironmentsFromModel(envs map[string]jobEnvOverride) map[string]smplkit
 		if isKnown(override.RetryPolicy) && override.RetryPolicy.ValueString() != "" {
 			je.RetryPolicy = override.RetryPolicy.ValueString()
 		}
+		// Per-environment overrides are flat leaves on the environment since
+		// ADR-056, not a nested configuration object. jobHTTPConfigFromModel
+		// already sends only the leaves the practitioner set, so copying its
+		// result onto the environment yields a sparse overlay.
 		if override.Configuration != nil {
 			cfg := jobHTTPConfigFromModel(override.Configuration)
-			je.Configuration = &cfg
+			je.URL = cfg.URL
+			je.Method = cfg.Method
+			je.SuccessStatus = cfg.SuccessStatus
+			je.Timeout = cfg.Timeout
+			je.Body = cfg.Body
+			je.TlsVerify = cfg.TlsVerify
+			je.CaCert = cfg.CaCert
+			je.Headers = cfg.Headers
 		}
 		out[env] = je
+	}
+	return out
+}
+
+// jobEnvPointerMap converts the value-typed override map (used to build a
+// create via WithJobEnvironments) into the pointer-typed map the SDK's
+// Job.Environments field holds, for the get-modify-write update path.
+func jobEnvPointerMap(m map[string]smplkit.JobEnvironment) map[string]*smplkit.JobEnvironment {
+	if m == nil {
+		return nil
+	}
+	out := make(map[string]*smplkit.JobEnvironment, len(m))
+	for k, v := range m {
+		v := v
+		out[k] = &v
 	}
 	return out
 }
@@ -535,9 +575,9 @@ func jobHTTPConfigFromModel(model *jobConfigurationModel) smplkit.HttpConfig {
 		out.CaCert = &c
 	}
 	if len(model.Headers) > 0 {
-		hdrs := make([]smplkit.HttpHeader, 0, len(model.Headers))
+		hdrs := make(map[string]string, len(model.Headers))
 		for _, h := range model.Headers {
-			hdrs = append(hdrs, smplkit.HttpHeader{Name: h.Name.ValueString(), Value: h.Value.ValueString()})
+			hdrs[h.Name.ValueString()] = h.Value.ValueString()
 		}
 		out.Headers = hdrs
 	}
@@ -550,7 +590,7 @@ func applyJobToModel(job *smplkit.Job, model *jobResourceModel) {
 	model.ID = types.StringValue(job.ID)
 	model.Name = types.StringValue(job.Name)
 	model.Description = stringPointerToTypes(job.Description)
-	model.Enabled = types.BoolValue(job.Enabled)
+	model.Enabled = types.BoolValue(job.Enabled())
 	if job.Kind != nil {
 		model.Kind = types.StringValue(string(*job.Kind))
 	} else {
@@ -576,14 +616,12 @@ func applyJobToModel(job *smplkit.Job, model *jobResourceModel) {
 		envs := make(map[string]jobEnvOverride, len(job.Environments))
 		for env, override := range job.Environments {
 			eo := jobEnvOverride{
-				Enabled:     types.BoolValue(override.Enabled),
-				Schedule:    emptyStringToNull(override.Schedule),
-				Timezone:    emptyStringToNull(override.Timezone),
-				RetryPolicy: emptyStringToNull(override.RetryPolicy),
-				NextRunAt:   timePointerToString(override.NextRunAt),
-			}
-			if override.Configuration != nil {
-				eo.Configuration = jobConfigurationModelFromHTTP(*override.Configuration)
+				Enabled:       types.BoolValue(override.Enabled),
+				Schedule:      emptyStringToNull(override.Schedule),
+				Timezone:      emptyStringToNull(override.Timezone),
+				RetryPolicy:   emptyStringToNull(override.RetryPolicy),
+				NextRunAt:     timePointerToString(override.NextRunAt),
+				Configuration: jobEnvConfigModel(override),
 			}
 			envs[env] = eo
 		}
@@ -634,14 +672,89 @@ func jobConfigurationModelFromHTTP(httpCfg smplkit.HttpConfig) *jobConfiguration
 	if httpCfg.CaCert != nil {
 		cfg.CACert = types.StringValue(*httpCfg.CaCert)
 	}
-	if len(httpCfg.Headers) > 0 {
-		hdrs := make([]jobHeader, 0, len(httpCfg.Headers))
-		for _, h := range httpCfg.Headers {
-			hdrs = append(hdrs, jobHeader{Name: types.StringValue(h.Name), Value: types.StringValue(h.Value)})
-		}
-		cfg.Headers = hdrs
+	cfg.Headers = jobHeadersFromMap(httpCfg.Headers)
+	return cfg
+}
+
+// jobHeadersFromMap projects the SDK's name→value header map (ADR-056) into the
+// schema's ordered header list, sorted by name for a deterministic baseline.
+// Callers reconcile the order against the plan/prior state (see
+// reconcileJobHeaderOrder) so the practitioner's declared order is preserved.
+func jobHeadersFromMap(m map[string]string) []jobHeader {
+	if len(m) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(m))
+	for name := range m {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	out := make([]jobHeader, 0, len(m))
+	for _, name := range names {
+		out = append(out, jobHeader{Name: types.StringValue(name), Value: types.StringValue(m[name])})
+	}
+	return out
+}
+
+// jobEnvConfigModel projects a job environment's flat configuration override
+// leaves (ADR-056) back into the schema's nested `configuration` block as a
+// SPARSE overlay: only the leaves this environment actually overrides are set,
+// the rest stay null. Returns nil when no configuration leaf is overridden, so
+// an enablement-only override emits no configuration. Unlike
+// jobConfigurationModelFromHTTP (the base configuration), no server defaults are
+// applied — a leaf an environment doesn't override inherits the base, it must
+// not read back as a default.
+func jobEnvConfigModel(e *smplkit.JobEnvironment) *jobConfigurationModel {
+	if e.URL == "" && e.Method == "" && e.SuccessStatus == "" && e.Timeout == 0 &&
+		e.Body == nil && e.TlsVerify == nil && e.CaCert == nil && len(e.Headers) == 0 {
+		return nil
+	}
+	cfg := &jobConfigurationModel{
+		URL:           types.StringValue(e.URL),
+		Method:        emptyStringToNull(string(e.Method)),
+		SuccessStatus: emptyStringToNull(e.SuccessStatus),
+		Timeout:       types.Int64Null(),
+		Body:          types.StringNull(),
+		TLSVerify:     types.BoolNull(),
+		CACert:        types.StringNull(),
+		Headers:       jobHeadersFromMap(e.Headers),
+	}
+	if e.Timeout != 0 {
+		cfg.Timeout = types.Int64Value(int64(e.Timeout))
+	}
+	if e.Body != nil {
+		cfg.Body = types.StringValue(*e.Body)
+	}
+	if e.TlsVerify != nil {
+		cfg.TLSVerify = types.BoolValue(*e.TlsVerify)
+	}
+	if e.CaCert != nil {
+		cfg.CACert = types.StringValue(*e.CaCert)
 	}
 	return cfg
+}
+
+// jobHeaderName extracts a header's name, for reorderHeaders.
+func jobHeaderName(h jobHeader) string { return h.Name.ValueString() }
+
+// reconcileJobHeaderOrder reorders the freshly-projected header lists on dst
+// (base configuration and every per-environment override) to match the order
+// they appear in ref — the plan on create/update, the prior state on read — so
+// the order-insensitive server header map doesn't churn the order-sensitive
+// schema list. Job header values round-trip plaintext, so only order needs
+// reconciling.
+func reconcileJobHeaderOrder(ref, dst *jobResourceModel) {
+	if ref.Configuration != nil && dst.Configuration != nil {
+		dst.Configuration.Headers = reorderHeaders(ref.Configuration.Headers, dst.Configuration.Headers, jobHeaderName)
+	}
+	for env, dstOverride := range dst.Environments {
+		refOverride, ok := ref.Environments[env]
+		if !ok || refOverride.Configuration == nil || dstOverride.Configuration == nil {
+			continue
+		}
+		dstOverride.Configuration.Headers = reorderHeaders(refOverride.Configuration.Headers, dstOverride.Configuration.Headers, jobHeaderName)
+		dst.Environments[env] = dstOverride
+	}
 }
 
 // emptyStringToNull maps a server-returned string into the framework's

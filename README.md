@@ -64,14 +64,28 @@ make docs-check    # fail if committed docs differ from generated
 
 The acceptance suite (`TF_ACC=1`) runs against a live smplkit platform.
 
+It is **destructive** — it deletes the authenticating account's seeded
+`development` environment to free a managed slot (ADR-051) — so locally it
+must run as a dedicated, isolated throwaway account, never your dev/preview
+account (ADR-052 §2.8).
+
 ```bash
-# Local development against the local platform (ADR-042).
-# Requires the four product services + Caddy to be running — see
+# Local development against the local platform (ADR-042). Requires the
+# product services + Caddy + the app service running — see
 # ~/projects/.github/platform/ for the orchestration.
-export SMPLKIT_API_KEY=sk_api_...
-export SMPLKIT_API_URL=http://localhost
-make testacc
+#
+# Provision the dedicated, isolated local-acceptance account once:
+python3 ~/projects/.github/platform/seed-acceptance-account.py
+#
+# Then run against it. testacc-local reads the [local-acceptance] profile
+# from ~/.smplkit and sets SMPLKIT_API_URL + SMPLKIT_ACC_DESTRUCTIVE=1.
+make testacc-local
 ```
+
+See `~/projects/.github/docs/local-testing.md` for the full story. The
+prod-only `make testacc` target (used by the e2e suite against an ephemeral
+production account) is unchanged and still requires an explicit
+`SMPLKIT_API_URL`.
 
 The tests cover create/read/update/delete, `terraform import`, and drift
 for each resource. Header values on `smplkit_audit_forwarder` are

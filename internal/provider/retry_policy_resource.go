@@ -5,11 +5,11 @@ import (
 	"fmt"
 
 	"github.com/hashicorp/terraform-plugin-framework-validators/int64validator"
-	"github.com/hashicorp/terraform-plugin-framework-validators/listvalidator"
 	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/booldefault"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
@@ -21,9 +21,6 @@ import (
 // the wire strings so casing doesn't drift between schema and SDK.
 var validBackoffStrategies = []string{"exponential", "fixed"}
 
-// validRetryReasons mirrors the SDK's RetryReason enum.
-var validRetryReasons = []string{"CONNECTION_ERROR", "NON_SUCCESS_STATUS", "TIMEOUT"}
-
 // NewRetryPolicyResource is the factory the provider hands to Terraform for
 // the `smplkit_retry_policy` resource.
 func NewRetryPolicyResource() resource.Resource {
@@ -34,25 +31,20 @@ type retryPolicyResource struct {
 	client *smplkit.SmplClient
 }
 
-// retryOnModel is the nested object inside `retry_on` — which failures the
-// policy retries. Both lists are optional; an absent `retry_on` (or one with
-// both lists empty) retries nothing.
-type retryOnModel struct {
-	Statuses []types.Int64  `tfsdk:"statuses"`
-	Reasons  []types.String `tfsdk:"reasons"`
-}
-
 type retryPolicyResourceModel struct {
-	ID              types.String  `tfsdk:"id"`
-	Name            types.String  `tfsdk:"name"`
-	MaxRetries      types.Int64   `tfsdk:"max_retries"`
-	Backoff         types.String  `tfsdk:"backoff"`
-	DelaySeconds    types.Int64   `tfsdk:"delay_seconds"`
-	MaxDelaySeconds types.Int64   `tfsdk:"max_delay_seconds"`
-	RetryOn         *retryOnModel `tfsdk:"retry_on"`
-	CreatedAt       types.String  `tfsdk:"created_at"`
-	UpdatedAt       types.String  `tfsdk:"updated_at"`
-	Version         types.Int64   `tfsdk:"version"`
+	ID                     types.String   `tfsdk:"id"`
+	Name                   types.String   `tfsdk:"name"`
+	MaxRetries             types.Int64    `tfsdk:"max_retries"`
+	Backoff                types.String   `tfsdk:"backoff"`
+	DelaySeconds           types.Int64    `tfsdk:"delay_seconds"`
+	MaxDelaySeconds        types.Int64    `tfsdk:"max_delay_seconds"`
+	RetryOnTimeout         types.Bool     `tfsdk:"retry_on_timeout"`
+	RetryOnConnectionError types.Bool     `tfsdk:"retry_on_connection_error"`
+	RetryStatuses          []types.String `tfsdk:"retry_statuses"`
+	RetryStatusesExcept    []types.String `tfsdk:"retry_statuses_except"`
+	CreatedAt              types.String   `tfsdk:"created_at"`
+	UpdatedAt              types.String   `tfsdk:"updated_at"`
+	Version                types.Int64    `tfsdk:"version"`
 }
 
 func (r *retryPolicyResource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
@@ -100,29 +92,35 @@ func (r *retryPolicyResource) Schema(_ context.Context, _ resource.SchemaRequest
 				Description: "Ceiling on the wait between retries, for `exponential` backoff only. Omit to leave " +
 					"it uncapped; do not set it for `fixed` backoff.",
 			},
-			"retry_on": schema.SingleNestedAttribute{
+			"retry_statuses": schema.ListAttribute{
+				Optional:    true,
+				ElementType: types.StringType,
+				Description: "Response status patterns to retry when a run fails because the response did not " +
+					"match the job's success status. Each is an exact 3-digit code (`429`) or a class " +
+					"(`1xx`, `2xx`, `3xx`, `4xx`, `5xx`) — e.g. `[\"429\", \"5xx\"]` to retry rate-limit and any " +
+					"server error. Omit to retry on no status.",
+			},
+			"retry_statuses_except": schema.ListAttribute{
+				Optional:    true,
+				ElementType: types.StringType,
+				Description: "Status patterns to subtract from `retry_statuses`, using the same exact-code or " +
+					"class syntax — a status matching both lists is not retried (except wins on overlap). E.g. " +
+					"`retry_statuses = [\"5xx\"]` with `retry_statuses_except = [\"501\"]` retries every server " +
+					"error except 501.",
+			},
+			"retry_on_timeout": schema.BoolAttribute{
 				Optional: true,
-				Description: "Which failures to retry. Omit it (or leave both lists empty) to retry nothing — a " +
-					"policy that retries no failures effectively never retries.",
-				Attributes: map[string]schema.Attribute{
-					"statuses": schema.ListAttribute{
-						Optional:    true,
-						ElementType: types.Int64Type,
-						Description: "Response status codes to retry when a run fails because the response did not " +
-							"match the job's success status (e.g. `[429, 503]` for rate-limit and unavailable). " +
-							"Each is a 3-digit HTTP code.",
-					},
-					"reasons": schema.ListAttribute{
-						Optional:    true,
-						ElementType: types.StringType,
-						Description: "Failure categories to retry. Each is one of `CONNECTION_ERROR` (the endpoint " +
-							"could not be reached), `NON_SUCCESS_STATUS` (any non-success response), or `TIMEOUT` " +
-							"(the run did not complete in time).",
-						Validators: []validator.List{
-							listvalidator.ValueStringsAre(stringvalidator.OneOf(validRetryReasons...)),
-						},
-					},
-				},
+				Computed: true,
+				Default:  booldefault.StaticBool(false),
+				Description: "Retry a run that failed because the request did not complete within the job's " +
+					"timeout. Defaults to `false`.",
+			},
+			"retry_on_connection_error": schema.BoolAttribute{
+				Optional: true,
+				Computed: true,
+				Default:  booldefault.StaticBool(false),
+				Description: "Retry a run that failed because the destination could not be reached (DNS, " +
+					"connection refused, TLS, or transport error). Defaults to `false`.",
 			},
 			"created_at": schema.StringAttribute{
 				Computed:      true,
@@ -226,7 +224,10 @@ func (r *retryPolicyResource) Update(ctx context.Context, req resource.UpdateReq
 	} else {
 		policy.MaxDelaySeconds = nil
 	}
-	policy.RetryOn = retryOnFromModel(plan.RetryOn)
+	policy.RetryStatuses = stringListToSlice(plan.RetryStatuses)
+	policy.RetryStatusesExcept = stringListToSlice(plan.RetryStatusesExcept)
+	policy.RetryOnTimeout = isKnownBool(plan.RetryOnTimeout) && plan.RetryOnTimeout.ValueBool()
+	policy.RetryOnConnectionError = isKnownBool(plan.RetryOnConnectionError) && plan.RetryOnConnectionError.ValueBool()
 
 	if err := policy.Save(ctx); err != nil {
 		addSDKErrorDiagnostic(&resp.Diagnostics, fmt.Sprintf("updating smplkit_retry_policy %q", state.ID.ValueString()), err)
@@ -255,42 +256,57 @@ func (r *retryPolicyResource) ImportState(ctx context.Context, req resource.Impo
 	resource.ImportStatePassthroughID(ctx, path.Root("id"), req, resp)
 }
 
-// buildRetryPolicyOptions threads the optional attributes (max delay,
-// retry-on) through the SDK's With* options. max_retries, backoff, and
+// buildRetryPolicyOptions threads the optional attributes (max delay, retry
+// conditions) through the SDK's With* options. max_retries, backoff, and
 // delay_seconds are Required, so they go through New directly.
 func buildRetryPolicyOptions(data *retryPolicyResourceModel) []smplkit.RetryPolicyOption {
 	opts := []smplkit.RetryPolicyOption{}
 	if isKnownInt(data.MaxDelaySeconds) {
 		opts = append(opts, smplkit.WithRetryPolicyMaxDelaySeconds(int(data.MaxDelaySeconds.ValueInt64())))
 	}
-	if data.RetryOn != nil {
-		opts = append(opts, smplkit.WithRetryPolicyRetryOn(retryOnFromModel(data.RetryOn)))
+	if statuses := stringListToSlice(data.RetryStatuses); len(statuses) > 0 {
+		opts = append(opts, smplkit.WithRetryPolicyRetryStatuses(statuses))
+	}
+	if except := stringListToSlice(data.RetryStatusesExcept); len(except) > 0 {
+		opts = append(opts, smplkit.WithRetryPolicyRetryStatusesExcept(except))
+	}
+	if isKnownBool(data.RetryOnTimeout) && data.RetryOnTimeout.ValueBool() {
+		opts = append(opts, smplkit.WithRetryPolicyRetryOnTimeout(true))
+	}
+	if isKnownBool(data.RetryOnConnectionError) && data.RetryOnConnectionError.ValueBool() {
+		opts = append(opts, smplkit.WithRetryPolicyRetryOnConnectionError(true))
 	}
 	return opts
 }
 
-// retryOnFromModel maps the schema's `retry_on` block into the SDK's RetryOn.
-// A nil model yields the zero RetryOn (retries nothing).
-func retryOnFromModel(model *retryOnModel) smplkit.RetryOn {
-	out := smplkit.RetryOn{}
-	if model == nil {
-		return out
+// stringListToSlice flattens a schema string list into a plain []string,
+// skipping null/unknown elements. Returns nil for an empty or absent list.
+func stringListToSlice(list []types.String) []string {
+	if len(list) == 0 {
+		return nil
 	}
-	if len(model.Statuses) > 0 {
-		out.Statuses = make([]int, 0, len(model.Statuses))
-		for _, s := range model.Statuses {
-			if isKnownInt(s) {
-				out.Statuses = append(out.Statuses, int(s.ValueInt64()))
-			}
+	out := make([]string, 0, len(list))
+	for _, v := range list {
+		if isKnown(v) {
+			out = append(out, v.ValueString())
 		}
 	}
-	if len(model.Reasons) > 0 {
-		out.Reasons = make([]smplkit.RetryReason, 0, len(model.Reasons))
-		for _, reason := range model.Reasons {
-			if isKnown(reason) {
-				out.Reasons = append(out.Reasons, smplkit.RetryReason(reason.ValueString()))
-			}
-		}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// stringSliceToList projects a plain []string into a schema string list,
+// preserving order. Returns nil for an empty slice so an omitted (null) list
+// round-trips rather than reporting null -> [] after apply.
+func stringSliceToList(s []string) []types.String {
+	if len(s) == 0 {
+		return nil
+	}
+	out := make([]types.String, 0, len(s))
+	for _, v := range s {
+		out = append(out, types.StringValue(v))
 	}
 	return out
 }
@@ -308,7 +324,10 @@ func applyRetryPolicyToModel(policy *smplkit.RetryPolicy, model *retryPolicyReso
 	} else {
 		model.MaxDelaySeconds = types.Int64Null()
 	}
-	model.RetryOn = retryOnModelFromSDK(policy.RetryOn)
+	model.RetryOnTimeout = types.BoolValue(policy.RetryOnTimeout)
+	model.RetryOnConnectionError = types.BoolValue(policy.RetryOnConnectionError)
+	model.RetryStatuses = stringSliceToList(policy.RetryStatuses)
+	model.RetryStatusesExcept = stringSliceToList(policy.RetryStatusesExcept)
 	model.CreatedAt = timePointerToString(policy.CreatedAt)
 	model.UpdatedAt = timePointerToString(policy.UpdatedAt)
 	if policy.Version != nil {
@@ -316,28 +335,4 @@ func applyRetryPolicyToModel(policy *smplkit.RetryPolicy, model *retryPolicyReso
 	} else {
 		model.Version = types.Int64Null()
 	}
-}
-
-// retryOnModelFromSDK projects a server-returned RetryOn into the Terraform
-// `retry_on` block. An empty RetryOn (both lists empty) maps to null so it
-// round-trips against an omitted (null) `retry_on` in config rather than
-// reporting null -> {} after apply.
-func retryOnModelFromSDK(retryOn smplkit.RetryOn) *retryOnModel {
-	if len(retryOn.Statuses) == 0 && len(retryOn.Reasons) == 0 {
-		return nil
-	}
-	out := &retryOnModel{}
-	if len(retryOn.Statuses) > 0 {
-		out.Statuses = make([]types.Int64, 0, len(retryOn.Statuses))
-		for _, s := range retryOn.Statuses {
-			out.Statuses = append(out.Statuses, types.Int64Value(int64(s)))
-		}
-	}
-	if len(retryOn.Reasons) > 0 {
-		out.Reasons = make([]types.String, 0, len(retryOn.Reasons))
-		for _, reason := range retryOn.Reasons {
-			out.Reasons = append(out.Reasons, types.StringValue(string(reason)))
-		}
-	}
-	return out
 }

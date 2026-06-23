@@ -9,11 +9,14 @@ resource "smplkit_retry_policy" "aggressive" {
   delay_seconds     = 2
   max_delay_seconds = 60
 
-  # Retry only on the failures worth retrying.
-  retry_on = {
-    statuses = [429, 503]
-    reasons  = ["CONNECTION_ERROR", "TIMEOUT"]
-  }
+  # Retry only on the failures worth retrying: rate-limit and any server
+  # error — but not a 501 Not Implemented, which won't change on retry —
+  # plus connection failures and timeouts. Status patterns are exact codes
+  # or classes (1xx–5xx).
+  retry_statuses            = ["429", "5xx"]
+  retry_statuses_except     = ["501"]
+  retry_on_connection_error = true
+  retry_on_timeout          = true
 }
 
 # Reference the policy from a job's base retry_policy, overridable per

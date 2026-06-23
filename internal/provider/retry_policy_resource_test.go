@@ -19,59 +19,56 @@ func TestRetryPolicyResource_Schema(t *testing.T) {
 	}
 	attrs := resp.Schema.Attributes
 	for _, name := range []string{
-		"id", "name", "max_retries", "backoff", "delay_seconds",
-		"max_delay_seconds", "retry_on", "created_at", "updated_at", "version",
+		"id", "name", "max_retries", "backoff", "delay_seconds", "max_delay_seconds",
+		"retry_statuses", "retry_statuses_except", "retry_on_timeout",
+		"retry_on_connection_error", "created_at", "updated_at", "version",
 	} {
 		if _, ok := attrs[name]; !ok {
 			t.Errorf("schema missing attribute %q", name)
 		}
 	}
-}
-
-func TestRetryOnFromModel_FullValues(t *testing.T) {
-	m := &retryOnModel{
-		Statuses: []types.Int64{types.Int64Value(429), types.Int64Value(503)},
-		Reasons:  []types.String{types.StringValue("CONNECTION_ERROR"), types.StringValue("TIMEOUT")},
-	}
-	out := retryOnFromModel(m)
-	if len(out.Statuses) != 2 || out.Statuses[0] != 429 || out.Statuses[1] != 503 {
-		t.Errorf("statuses not converted: %+v", out.Statuses)
-	}
-	if len(out.Reasons) != 2 || out.Reasons[0] != smplkit.RetryReasonConnectionError || out.Reasons[1] != smplkit.RetryReasonTimeout {
-		t.Errorf("reasons not converted: %+v", out.Reasons)
+	// The legacy nested retry_on block is gone.
+	if _, ok := attrs["retry_on"]; ok {
+		t.Error("legacy retry_on attribute must be removed")
 	}
 }
 
-func TestRetryOnFromModel_Nil(t *testing.T) {
-	out := retryOnFromModel(nil)
-	if len(out.Statuses) != 0 || len(out.Reasons) != 0 {
-		t.Errorf("nil model should yield empty RetryOn: %+v", out)
+func TestStringListToSlice(t *testing.T) {
+	out := stringListToSlice([]types.String{types.StringValue("429"), types.StringValue("5xx")})
+	if len(out) != 2 || out[0] != "429" || out[1] != "5xx" {
+		t.Errorf("not converted in order: %#v", out)
+	}
+	// Unknown/null elements are skipped.
+	skipped := stringListToSlice([]types.String{types.StringValue("429"), types.StringUnknown(), types.StringNull()})
+	if len(skipped) != 1 || skipped[0] != "429" {
+		t.Errorf("unknown/null not skipped: %#v", skipped)
+	}
+	// Empty / all-skipped yields nil.
+	if got := stringListToSlice(nil); got != nil {
+		t.Errorf("nil input should yield nil: %#v", got)
+	}
+	if got := stringListToSlice([]types.String{types.StringNull()}); got != nil {
+		t.Errorf("all-null input should yield nil: %#v", got)
 	}
 }
 
-func TestRetryOnFromModel_SkipsUnknownElements(t *testing.T) {
-	// Unknown list elements must be skipped rather than projected as zero
-	// values onto the wire.
-	m := &retryOnModel{
-		Statuses: []types.Int64{types.Int64Value(429), types.Int64Unknown()},
-		Reasons:  []types.String{types.StringValue("TIMEOUT"), types.StringNull()},
+func TestStringSliceToList(t *testing.T) {
+	out := stringSliceToList([]string{"429", "5xx"})
+	if len(out) != 2 || out[0].ValueString() != "429" || out[1].ValueString() != "5xx" {
+		t.Errorf("not projected in order: %#v", out)
 	}
-	out := retryOnFromModel(m)
-	if len(out.Statuses) != 1 || out.Statuses[0] != 429 {
-		t.Errorf("unknown status not skipped: %+v", out.Statuses)
-	}
-	if len(out.Reasons) != 1 || out.Reasons[0] != smplkit.RetryReasonTimeout {
-		t.Errorf("null reason not skipped: %+v", out.Reasons)
+	if got := stringSliceToList(nil); got != nil {
+		t.Errorf("empty slice should project to nil: %#v", got)
 	}
 }
 
 func TestBuildRetryPolicyOptions(t *testing.T) {
 	m := &retryPolicyResourceModel{
-		MaxDelaySeconds: types.Int64Value(120),
-		RetryOn: &retryOnModel{
-			Statuses: []types.Int64{types.Int64Value(503)},
-			Reasons:  []types.String{types.StringValue("NON_SUCCESS_STATUS")},
-		},
+		MaxDelaySeconds:        types.Int64Value(120),
+		RetryStatuses:          []types.String{types.StringValue("429"), types.StringValue("5xx")},
+		RetryStatusesExcept:    []types.String{types.StringValue("501")},
+		RetryOnTimeout:         types.BoolValue(true),
+		RetryOnConnectionError: types.BoolValue(true),
 	}
 	policy := &smplkit.RetryPolicy{}
 	for _, opt := range buildRetryPolicyOptions(m) {
@@ -80,20 +77,24 @@ func TestBuildRetryPolicyOptions(t *testing.T) {
 	if policy.MaxDelaySeconds == nil || *policy.MaxDelaySeconds != 120 {
 		t.Errorf("max_delay_seconds option not applied: %v", policy.MaxDelaySeconds)
 	}
-	if len(policy.RetryOn.Statuses) != 1 || policy.RetryOn.Statuses[0] != 503 {
-		t.Errorf("retry_on statuses option not applied: %+v", policy.RetryOn)
+	if len(policy.RetryStatuses) != 2 || policy.RetryStatuses[0] != "429" || policy.RetryStatuses[1] != "5xx" {
+		t.Errorf("retry_statuses option not applied: %+v", policy.RetryStatuses)
 	}
-	if len(policy.RetryOn.Reasons) != 1 || policy.RetryOn.Reasons[0] != smplkit.RetryReasonNonSuccessStatus {
-		t.Errorf("retry_on reasons option not applied: %+v", policy.RetryOn)
+	if len(policy.RetryStatusesExcept) != 1 || policy.RetryStatusesExcept[0] != "501" {
+		t.Errorf("retry_statuses_except option not applied: %+v", policy.RetryStatusesExcept)
+	}
+	if !policy.RetryOnTimeout || !policy.RetryOnConnectionError {
+		t.Errorf("retry-on booleans not applied: timeout=%v conn=%v", policy.RetryOnTimeout, policy.RetryOnConnectionError)
 	}
 }
 
 func TestBuildRetryPolicyOptions_OmitsUnsetOptionals(t *testing.T) {
-	// A null max_delay_seconds and an absent retry_on must leave the SDK
-	// defaults intact (nil pointer, empty RetryOn).
+	// A null max_delay_seconds, absent status lists, and false booleans must
+	// leave the SDK defaults intact (nil pointer, empty slices, false bools).
 	m := &retryPolicyResourceModel{
-		MaxDelaySeconds: types.Int64Null(),
-		RetryOn:         nil,
+		MaxDelaySeconds:        types.Int64Null(),
+		RetryOnTimeout:         types.BoolValue(false),
+		RetryOnConnectionError: types.BoolNull(),
 	}
 	policy := &smplkit.RetryPolicy{}
 	for _, opt := range buildRetryPolicyOptions(m) {
@@ -102,8 +103,11 @@ func TestBuildRetryPolicyOptions_OmitsUnsetOptionals(t *testing.T) {
 	if policy.MaxDelaySeconds != nil {
 		t.Errorf("null max_delay_seconds should not be applied, got %v", *policy.MaxDelaySeconds)
 	}
-	if len(policy.RetryOn.Statuses) != 0 || len(policy.RetryOn.Reasons) != 0 {
-		t.Errorf("absent retry_on should leave RetryOn empty, got %+v", policy.RetryOn)
+	if len(policy.RetryStatuses) != 0 || len(policy.RetryStatusesExcept) != 0 {
+		t.Errorf("absent status lists should leave them empty, got %+v / %+v", policy.RetryStatuses, policy.RetryStatusesExcept)
+	}
+	if policy.RetryOnTimeout || policy.RetryOnConnectionError {
+		t.Errorf("false/absent booleans should leave them false: timeout=%v conn=%v", policy.RetryOnTimeout, policy.RetryOnConnectionError)
 	}
 }
 
@@ -113,19 +117,19 @@ func TestApplyRetryPolicyToModel_FullValues(t *testing.T) {
 	created := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
 	updated := time.Date(2026, 6, 2, 0, 0, 0, 0, time.UTC)
 	policy := &smplkit.RetryPolicy{
-		ID:              "aggressive-retry",
-		Name:            "Aggressive retry",
-		MaxRetries:      5,
-		Backoff:         smplkit.BackoffExponential,
-		DelaySeconds:    2,
-		MaxDelaySeconds: &maxDelay,
-		RetryOn: smplkit.RetryOn{
-			Statuses: []int{429, 503},
-			Reasons:  []smplkit.RetryReason{smplkit.RetryReasonConnectionError},
-		},
-		CreatedAt: &created,
-		UpdatedAt: &updated,
-		Version:   &ver,
+		ID:                     "aggressive-retry",
+		Name:                   "Aggressive retry",
+		MaxRetries:             5,
+		Backoff:                smplkit.BackoffExponential,
+		DelaySeconds:           2,
+		MaxDelaySeconds:        &maxDelay,
+		RetryOnTimeout:         true,
+		RetryOnConnectionError: true,
+		RetryStatuses:          []string{"429", "5xx"},
+		RetryStatusesExcept:    []string{"501"},
+		CreatedAt:              &created,
+		UpdatedAt:              &updated,
+		Version:                &ver,
 	}
 	var m retryPolicyResourceModel
 	applyRetryPolicyToModel(policy, &m)
@@ -138,11 +142,14 @@ func TestApplyRetryPolicyToModel_FullValues(t *testing.T) {
 	if m.MaxDelaySeconds.ValueInt64() != 90 {
 		t.Errorf("max_delay_seconds: %d", m.MaxDelaySeconds.ValueInt64())
 	}
-	if m.RetryOn == nil || len(m.RetryOn.Statuses) != 2 || m.RetryOn.Statuses[0].ValueInt64() != 429 {
-		t.Errorf("retry_on statuses not projected: %+v", m.RetryOn)
+	if !m.RetryOnTimeout.ValueBool() || !m.RetryOnConnectionError.ValueBool() {
+		t.Errorf("retry-on booleans not projected: %+v", m)
 	}
-	if m.RetryOn == nil || len(m.RetryOn.Reasons) != 1 || m.RetryOn.Reasons[0].ValueString() != "CONNECTION_ERROR" {
-		t.Errorf("retry_on reasons not projected: %+v", m.RetryOn)
+	if len(m.RetryStatuses) != 2 || m.RetryStatuses[0].ValueString() != "429" || m.RetryStatuses[1].ValueString() != "5xx" {
+		t.Errorf("retry_statuses not projected: %+v", m.RetryStatuses)
+	}
+	if len(m.RetryStatusesExcept) != 1 || m.RetryStatusesExcept[0].ValueString() != "501" {
+		t.Errorf("retry_statuses_except not projected: %+v", m.RetryStatusesExcept)
 	}
 	if m.CreatedAt.ValueString() != "2026-06-01T00:00:00Z" || m.UpdatedAt.ValueString() != "2026-06-02T00:00:00Z" {
 		t.Errorf("timestamps: created=%q updated=%q", m.CreatedAt.ValueString(), m.UpdatedAt.ValueString())
@@ -153,9 +160,10 @@ func TestApplyRetryPolicyToModel_FullValues(t *testing.T) {
 }
 
 func TestApplyRetryPolicyToModel_NullsForUnsetFields(t *testing.T) {
-	// An uncapped delay (nil MaxDelaySeconds) and an empty RetryOn (both
-	// lists empty) must project to null so an omitted Optional attribute
-	// round-trips cleanly rather than reporting null -> {} after apply.
+	// An uncapped delay (nil MaxDelaySeconds) and empty status lists must project
+	// to null so an omitted Optional attribute round-trips cleanly. The two
+	// booleans are Optional+Computed (default false), so they project to their
+	// concrete value.
 	policy := &smplkit.RetryPolicy{
 		ID:           "fixed-retry",
 		Name:         "Fixed retry",
@@ -168,36 +176,13 @@ func TestApplyRetryPolicyToModel_NullsForUnsetFields(t *testing.T) {
 	if !m.MaxDelaySeconds.IsNull() {
 		t.Errorf("max_delay_seconds should be null when uncapped, got %d", m.MaxDelaySeconds.ValueInt64())
 	}
-	if m.RetryOn != nil {
-		t.Errorf("retry_on should be null when empty, got %+v", m.RetryOn)
+	if m.RetryStatuses != nil || m.RetryStatusesExcept != nil {
+		t.Errorf("status lists should be nil when empty, got %+v / %+v", m.RetryStatuses, m.RetryStatusesExcept)
+	}
+	if m.RetryOnTimeout.ValueBool() || m.RetryOnConnectionError.ValueBool() {
+		t.Errorf("unset booleans should project to false, got timeout=%v conn=%v", m.RetryOnTimeout, m.RetryOnConnectionError)
 	}
 	if !m.Version.IsNull() {
 		t.Errorf("version should be null when unset")
-	}
-}
-
-func TestRetryOnModelFromSDK_RoundTrip(t *testing.T) {
-	// A non-empty RetryOn projects back into a model that round-trips through
-	// retryOnFromModel to the same SDK shape.
-	in := smplkit.RetryOn{
-		Statuses: []int{500},
-		Reasons:  []smplkit.RetryReason{smplkit.RetryReasonTimeout, smplkit.RetryReasonConnectionError},
-	}
-	model := retryOnModelFromSDK(in)
-	if model == nil {
-		t.Fatal("non-empty RetryOn should project to a non-nil model")
-	}
-	out := retryOnFromModel(model)
-	if len(out.Statuses) != 1 || out.Statuses[0] != 500 {
-		t.Errorf("statuses round-trip: %+v", out.Statuses)
-	}
-	if len(out.Reasons) != 2 || out.Reasons[0] != smplkit.RetryReasonTimeout {
-		t.Errorf("reasons round-trip: %+v", out.Reasons)
-	}
-}
-
-func TestRetryOnModelFromSDK_EmptyIsNil(t *testing.T) {
-	if model := retryOnModelFromSDK(smplkit.RetryOn{}); model != nil {
-		t.Errorf("empty RetryOn should project to nil, got %+v", model)
 	}
 }

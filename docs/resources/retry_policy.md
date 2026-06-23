@@ -24,11 +24,14 @@ resource "smplkit_retry_policy" "aggressive" {
   delay_seconds     = 2
   max_delay_seconds = 60
 
-  # Retry only on the failures worth retrying.
-  retry_on = {
-    statuses = [429, 503]
-    reasons  = ["CONNECTION_ERROR", "TIMEOUT"]
-  }
+  # Retry only on the failures worth retrying: rate-limit and any server
+  # error — but not a 501 Not Implemented, which won't change on retry —
+  # plus connection failures and timeouts. Status patterns are exact codes
+  # or classes (1xx–5xx).
+  retry_statuses            = ["429", "5xx"]
+  retry_statuses_except     = ["501"]
+  retry_on_connection_error = true
+  retry_on_timeout          = true
 }
 
 # Reference the policy from a job's base retry_policy, overridable per
@@ -59,21 +62,16 @@ resource "smplkit_job" "nightly_cache_warm" {
 ### Optional
 
 - `max_delay_seconds` (Number) Ceiling on the wait between retries, for `exponential` backoff only. Omit to leave it uncapped; do not set it for `fixed` backoff.
-- `retry_on` (Attributes) Which failures to retry. Omit it (or leave both lists empty) to retry nothing — a policy that retries no failures effectively never retries. (see [below for nested schema](#nestedatt--retry_on))
+- `retry_on_connection_error` (Boolean) Retry a run that failed because the destination could not be reached (DNS, connection refused, TLS, or transport error). Defaults to `false`.
+- `retry_on_timeout` (Boolean) Retry a run that failed because the request did not complete within the job's timeout. Defaults to `false`.
+- `retry_statuses` (List of String) Response status patterns to retry when a run fails because the response did not match the job's success status. Each is an exact 3-digit code (`429`) or a class (`1xx`, `2xx`, `3xx`, `4xx`, `5xx`) — e.g. `["429", "5xx"]` to retry rate-limit and any server error. Omit to retry on no status.
+- `retry_statuses_except` (List of String) Status patterns to subtract from `retry_statuses`, using the same exact-code or class syntax — a status matching both lists is not retried (except wins on overlap). E.g. `retry_statuses = ["5xx"]` with `retry_statuses_except = ["501"]` retries every server error except 501.
 
 ### Read-Only
 
 - `created_at` (String) RFC3339 timestamp set by the server when the policy was created.
 - `updated_at` (String) RFC3339 timestamp set by the server on every write. Recomputed on every apply, so plans involving updates show this as `(known after apply)`.
 - `version` (Number) Monotonic counter bumped by the server on every write, starting at 1.
-
-<a id="nestedatt--retry_on"></a>
-### Nested Schema for `retry_on`
-
-Optional:
-
-- `reasons` (List of String) Failure categories to retry. Each is one of `CONNECTION_ERROR` (the endpoint could not be reached), `NON_SUCCESS_STATUS` (any non-success response), or `TIMEOUT` (the run did not complete in time).
-- `statuses` (List of Number) Response status codes to retry when a run fails because the response did not match the job's success status (e.g. `[429, 503]` for rate-limit and unavailable). Each is a 3-digit HTTP code.
 
 ## Import
 

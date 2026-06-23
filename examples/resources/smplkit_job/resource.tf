@@ -6,12 +6,11 @@ variable "cache_warm_token" {
 resource "smplkit_retry_policy" "cache_warm_retry" {
   id            = "cache-warm-retry"
   name          = "Cache warm retry"
-  max_retries   = 3
-  backoff       = "exponential"
-  delay_seconds = 5
-  retry_on = {
-    reasons = ["CONNECTION_ERROR", "TIMEOUT"]
-  }
+  max_retries               = 3
+  backoff                   = "exponential"
+  delay_seconds             = 5
+  retry_on_connection_error = true
+  retry_on_timeout          = true
 }
 
 resource "smplkit_job" "nightly_cache_warm" {

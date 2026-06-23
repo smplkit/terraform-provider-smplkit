@@ -67,7 +67,7 @@ resource "smplkit_audit_forwarder" "splunk_prod" {
 ### Optional
 
 - `description` (String) Optional free-text description.
-- `environments` (Attributes Map) Per-environment configuration keyed by environment id (e.g. `production`). A forwarder delivers events in an environment only when that environment's entry sets `enabled = true`; an environment with no entry receives no deliveries. Each entry may also carry a `configuration` override that fully replaces the base `configuration` in that environment. Every referenced environment must already exist and be managed for the account. (see [below for nested schema](#nestedatt--environments))
+- `environments` (Attributes Map) Per-environment configuration keyed by environment id (e.g. `production`). A forwarder delivers events in an environment only when that environment's entry sets `enabled = true`; an environment with no entry receives no deliveries. Each entry may also carry a `configuration` override of one or more leaves (URL, method, headers, …); each leaf set overrides just that leaf, the rest inheriting the base `configuration`. Every referenced environment must already exist and be managed for the account. (see [below for nested schema](#nestedatt--environments))
 - `filter` (String) Optional JSON Logic expression (as a JSON-encoded string) evaluated against each event. Events that don't match are recorded as filtered-out deliveries and not forwarded.
 - `forward_smplkit_events` (Boolean) When `true`, this forwarder also receives platform change events that smplkit records about your own resources (flag, configuration, and similar changes). Each such event is delivered through every environment this forwarder is enabled in, using that environment's resolved configuration. Defaults to `false` — platform change events are not forwarded unless you opt in. Independent of the per-environment `enabled` settings, since platform change events are not tied to a deployment environment.
 - `transform` (String) Optional template applied to each event before delivery. Shape depends on `transform_type`; for `JSONATA` this is the JSONata expression string. Must be set together with `transform_type`.
@@ -107,8 +107,8 @@ Required:
 
 Optional:
 
-- `configuration` (Attributes) Optional per-environment HTTP request configuration that fully replaces the base `configuration` in this environment. Omit to inherit the base configuration. (see [below for nested schema](#nestedatt--environments--configuration))
-- `enabled` (Boolean) Whether the forwarder delivers events in this environment. Defaults to `false`.
+- `configuration` (Attributes) Optional per-environment HTTP request override. Each leaf you set (URL, method, headers, …) overrides just that leaf for this environment; leaves you omit inherit the base `configuration`. (see [below for nested schema](#nestedatt--environments--configuration))
+- `enabled` (Boolean) Whether the forwarder delivers events in this environment. Defaults to `false`. Omit it on an override that sets only `configuration` to leave delivery disabled in that environment.
 
 <a id="nestedatt--environments--configuration"></a>
 ### Nested Schema for `environments.configuration`

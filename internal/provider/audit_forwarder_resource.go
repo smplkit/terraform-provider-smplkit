@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"fmt"
+	"sort"
 
 	"github.com/hashicorp/terraform-plugin-framework-validators/listvalidator"
 	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
@@ -111,17 +112,22 @@ func (r *auditForwarderResource) Schema(_ context.Context, _ resource.SchemaRequ
 				Description: "Per-environment configuration keyed by environment id (e.g. `production`). " +
 					"A forwarder delivers events in an environment only when that environment's entry sets " +
 					"`enabled = true`; an environment with no entry receives no deliveries. Each entry may also " +
-					"carry a `configuration` override that fully replaces the base `configuration` in that environment. " +
+					"carry a `configuration` override of one or more leaves (URL, method, headers, …); each leaf " +
+					"set overrides just that leaf, the rest inheriting the base `configuration`. " +
 					"Every referenced environment must already exist and be managed for the account.",
 				NestedObject: schema.NestedAttributeObject{
 					Attributes: map[string]schema.Attribute{
 						"enabled": schema.BoolAttribute{
-							Optional:    true,
-							Description: "Whether the forwarder delivers events in this environment. Defaults to `false`.",
+							Optional: true,
+							Computed: true,
+							Description: "Whether the forwarder delivers events in this environment. Defaults to " +
+								"`false`. Omit it on an override that sets only `configuration` to leave delivery " +
+								"disabled in that environment.",
 						},
 						"configuration": forwarderConfigurationSchemaAttribute(false,
-							"Optional per-environment HTTP request configuration that fully replaces the base "+
-								"`configuration` in this environment. Omit to inherit the base configuration."),
+							"Optional per-environment HTTP request override. Each leaf you set (URL, method, "+
+								"headers, …) overrides just that leaf for this environment; leaves you omit inherit "+
+								"the base `configuration`."),
 					},
 				},
 			},
@@ -300,6 +306,10 @@ func (r *auditForwarderResource) Read(ctx context.Context, req resource.ReadRequ
 		// wrote to state so we don't decide the user changed every
 		// header on every read.
 		mergeRedactedHeaders(prior.Headers, data.Configuration.Headers)
+		// The server returns headers as an unordered object (ADR-056); restore
+		// the prior declared order so refresh doesn't churn the order-sensitive
+		// list.
+		data.Configuration.Headers = reorderHeaders(prior.Headers, data.Configuration.Headers, forwarderHeaderName)
 	}
 	mergeRedactedEnvHeaders(priorEnvs, data.Environments)
 
@@ -326,7 +336,7 @@ func (r *auditForwarderResource) Update(ctx context.Context, req resource.Update
 	// Full-replace the per-environment override map with the plan's. A
 	// nil map clears enablement everywhere (the base `enabled` is
 	// server-pinned false per ADR-055).
-	fwd.Environments = forwarderEnvironmentsFromModel(plan.Environments)
+	fwd.Environments = forwarderEnvPointerMap(forwarderEnvironmentsFromModel(plan.Environments))
 	if !plan.ForwardSmplkitEvents.IsNull() && !plan.ForwardSmplkitEvents.IsUnknown() {
 		v := plan.ForwardSmplkitEvents.ValueBool()
 		fwd.ForwardSmplkitEvents = &v
@@ -446,9 +456,9 @@ func httpConfigurationFromModel(model *forwarderConfigurationModel) smplkit.Http
 		out.SuccessStatus = model.SuccessStatus.ValueString()
 	}
 	if len(model.Headers) > 0 {
-		hdrs := make([]smplkit.HttpHeader, 0, len(model.Headers))
+		hdrs := make(map[string]string, len(model.Headers))
 		for _, h := range model.Headers {
-			hdrs = append(hdrs, smplkit.HttpHeader{Name: h.Name.ValueString(), Value: h.Value.ValueString()})
+			hdrs[h.Name.ValueString()] = h.Value.ValueString()
 		}
 		out.Headers = hdrs
 	}
@@ -498,9 +508,9 @@ func applyForwarderToModel(fwd *smplkit.Forwarder, model *auditForwarderResource
 	} else {
 		envs := make(map[string]forwarderEnvOverride, len(fwd.Environments))
 		for env, override := range fwd.Environments {
-			eo := forwarderEnvOverride{Enabled: types.BoolValue(override.Enabled)}
-			if override.Configuration != nil {
-				eo.Configuration = configurationModelFromHTTP(*override.Configuration)
+			eo := forwarderEnvOverride{
+				Enabled:       types.BoolValue(override.Enabled),
+				Configuration: forwarderEnvConfigModel(override),
 			}
 			envs[env] = eo
 		}
@@ -533,15 +543,50 @@ func configurationModelFromHTTP(httpCfg smplkit.HttpConfiguration) *forwarderCon
 	if cfg.SuccessStatus.ValueString() == "" {
 		cfg.SuccessStatus = types.StringValue("2xx")
 	}
-	if len(httpCfg.Headers) > 0 {
-		hdrs := make([]forwarderHeader, 0, len(httpCfg.Headers))
-		for _, h := range httpCfg.Headers {
-			hdrs = append(hdrs, forwarderHeader{Name: types.StringValue(h.Name), Value: types.StringValue(h.Value)})
-		}
-		cfg.Headers = hdrs
-	}
+	cfg.Headers = forwarderHeadersFromMap(httpCfg.Headers)
 	return cfg
 }
+
+// forwarderHeadersFromMap projects the SDK's name→value header map (ADR-056)
+// into the schema's ordered header list, sorted by name for a deterministic
+// baseline. Callers reconcile the order against the plan/prior state so the
+// practitioner's declared order is preserved.
+func forwarderHeadersFromMap(m map[string]string) []forwarderHeader {
+	if len(m) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(m))
+	for name := range m {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	out := make([]forwarderHeader, 0, len(m))
+	for _, name := range names {
+		out = append(out, forwarderHeader{Name: types.StringValue(name), Value: types.StringValue(m[name])})
+	}
+	return out
+}
+
+// forwarderEnvConfigModel projects a forwarder environment's flat configuration
+// override leaves (ADR-056) back into the schema's nested `configuration` block
+// as a SPARSE overlay: only the leaves this environment actually overrides are
+// set, the rest stay null. Returns nil when no configuration leaf is overridden.
+// Unlike configurationModelFromHTTP (the base configuration), no server defaults
+// are applied — a leaf an environment doesn't override inherits the base.
+func forwarderEnvConfigModel(e *smplkit.ForwarderEnvironment) *forwarderConfigurationModel {
+	if e.URL == "" && e.Method == "" && e.SuccessStatus == "" && len(e.Headers) == 0 {
+		return nil
+	}
+	return &forwarderConfigurationModel{
+		URL:           types.StringValue(e.URL),
+		Method:        emptyStringToNull(string(e.Method)),
+		SuccessStatus: emptyStringToNull(e.SuccessStatus),
+		Headers:       forwarderHeadersFromMap(e.Headers),
+	}
+}
+
+// forwarderHeaderName extracts a header's name, for reorderHeaders.
+func forwarderHeaderName(h forwarderHeader) string { return h.Name.ValueString() }
 
 // forwarderEnvironmentsFromModel builds the SDK per-environment override
 // map from the Terraform model. A per-environment configuration override
@@ -558,11 +603,35 @@ func forwarderEnvironmentsFromModel(envs map[string]forwarderEnvOverride) map[st
 		if !override.Enabled.IsNull() && !override.Enabled.IsUnknown() {
 			fe.Enabled = override.Enabled.ValueBool()
 		}
+		// Per-environment overrides are flat leaves on the environment since
+		// ADR-056, not a nested configuration object. httpConfigurationFromModel
+		// sends only the leaves the practitioner set, so copying its result onto
+		// the environment yields a sparse overlay.
 		if override.Configuration != nil {
 			cfg := httpConfigurationFromModel(override.Configuration)
-			fe.Configuration = &cfg
+			fe.URL = cfg.URL
+			fe.Method = cfg.Method
+			fe.SuccessStatus = cfg.SuccessStatus
+			fe.TlsVerify = cfg.TlsVerify
+			fe.CaCert = cfg.CaCert
+			fe.Headers = cfg.Headers
 		}
 		out[env] = fe
+	}
+	return out
+}
+
+// forwarderEnvPointerMap converts the value-typed override map (used to build a
+// create via WithForwarderEnvironments) into the pointer-typed map the SDK's
+// Forwarder.Environments field holds, for the get-modify-write update path.
+func forwarderEnvPointerMap(m map[string]smplkit.ForwarderEnvironment) map[string]*smplkit.ForwarderEnvironment {
+	if m == nil {
+		return nil
+	}
+	out := make(map[string]*smplkit.ForwarderEnvironment, len(m))
+	for k, v := range m {
+		v := v
+		out[k] = &v
 	}
 	return out
 }
@@ -602,6 +671,8 @@ func mergeRedactedEnvHeaders(prior, current map[string]forwarderEnvOverride) {
 			continue
 		}
 		mergeRedactedHeaders(priorOverride.Configuration.Headers, currentOverride.Configuration.Headers)
+		currentOverride.Configuration.Headers = reorderHeaders(priorOverride.Configuration.Headers, currentOverride.Configuration.Headers, forwarderHeaderName)
+		current[env] = currentOverride
 	}
 }
 

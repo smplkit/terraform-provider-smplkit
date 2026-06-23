@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"strings"
 	"testing"
 	"time"
 
@@ -17,13 +16,16 @@ import (
 
 // Acceptance tests run against a real smplkit platform and are DESTRUCTIVE
 // (they create and delete real environments, and delete the seeded
-// `development` environment to free a managed-environment slot). Per ADR-052 §2.8
-// they must target an ephemeral production account — never the shared local
-// dev platform. They're guarded by TF_ACC=1 plus SMPLKIT_API_KEY, and the
-// target is selected with SMPLKIT_API_URL (the e2e suite passes the prod
-// endpoint and a throwaway Pro-tier key). The destructive slot-free step
-// additionally refuses a local endpoint unless SMPLKIT_ACC_DESTRUCTIVE=1 is
-// set, so a stray run can't wipe local dev data.
+// `development` environment to free a managed-environment slot). The suite does
+// NOT create a throwaway account — it operates on whatever account
+// SMPLKIT_API_KEY holds, so running it against a real account wipes that
+// account's `development`. To make accidental destruction impossible, the gate
+// refuses to run unless SMPLKIT_ACC_DESTRUCTIVE=1 is set — an explicit
+// acknowledgement that the target is a throwaway account whose data may be
+// destroyed (ADR-052 §2.8). `make testacc-local` sets it for the dedicated,
+// isolated local account; the e2e suite sets it for its bootstrapped throwaway
+// Pro-tier prod account. They are otherwise guarded by TF_ACC=1 + SMPLKIT_API_KEY,
+// with the target selected via SMPLKIT_API_URL.
 
 // testAccProtoV6ProviderFactories wires our provider into the testing
 // framework's harness. The factory is invoked once per test; the
@@ -42,6 +44,27 @@ func testAccPreCheck(t *testing.T) {
 	// run wipe local dev data; that silent default is gone.
 	if os.Getenv("SMPLKIT_API_URL") == "" {
 		t.Skip("SMPLKIT_API_URL not set; skipping acceptance test (set it to a throwaway-account endpoint)")
+	}
+	requireAccDestructive(t)
+}
+
+// requireAccDestructive refuses to run unless the caller has explicitly
+// acknowledged that the suite is destructive. The suite deletes the
+// authenticating account's seeded `development` environment (ADR-051) and
+// operates on whatever account SMPLKIT_API_KEY holds — it does NOT create a
+// throwaway account — so without this gate a stray run against a real account
+// (local dev/preview or production) would wipe that account's `development`.
+// `make testacc-local` sets the flag for the dedicated isolated local account;
+// the e2e suite sets it for its bootstrapped throwaway prod account.
+func requireAccDestructive(t *testing.T) {
+	t.Helper()
+	if os.Getenv("SMPLKIT_ACC_DESTRUCTIVE") != "1" {
+		t.Fatal("refusing to run: these acceptance tests are DESTRUCTIVE — they delete the " +
+			"authenticating account's seeded `development` environment (ADR-051) and operate on " +
+			"whatever account SMPLKIT_API_KEY holds (they do NOT create a throwaway account). Set " +
+			"SMPLKIT_ACC_DESTRUCTIVE=1 only when SMPLKIT_API_URL / SMPLKIT_API_KEY target a dedicated " +
+			"throwaway account whose data may be destroyed (ADR-052 §2.8). Locally, use " +
+			"`make testacc-local`; see ~/projects/.github/docs/local-testing.md.")
 	}
 }
 
@@ -86,16 +109,6 @@ resource "smplkit_service" "test" {
 
 // ─── smplkit_environment ───────────────────────────────────────────────────
 
-// isLocalEndpoint reports whether the configured SMPLKIT_API_URL points at a
-// local platform. Used to refuse destructive setup against the shared local
-// dev account (ADR-052 §2.8).
-func isLocalEndpoint(raw string) bool {
-	s := strings.ToLower(raw)
-	return strings.Contains(s, "localhost") ||
-		strings.Contains(s, "127.0.0.1") ||
-		strings.Contains(s, "0.0.0.0")
-}
-
 // freeOneManagedEnvironmentSlot deletes the seeded `development`
 // environment, if it exists, so the test below has a free
 // platform.managed_environments slot to spend. A fresh free-tier
@@ -112,20 +125,12 @@ func freeOneManagedEnvironmentSlot(t *testing.T) {
 	if apiKey == "" {
 		t.Skip("SMPLKIT_API_KEY not set; skipping env-slot prep")
 	}
-	// Defense-in-depth: never delete `development` against a local endpoint.
-	// These tests are e2e and belong on an ephemeral production account
-	// (ADR-052 §2.8); pointing them at the shared local dev platform once wiped
-	// real data. An explicit SMPLKIT_ACC_DESTRUCTIVE=1 opt-in is required to
-	// run the destructive slot-free against a throwaway *local* account.
-	if isLocalEndpoint(os.Getenv("SMPLKIT_API_URL")) && os.Getenv("SMPLKIT_ACC_DESTRUCTIVE") != "1" {
-		t.Fatalf(
-			"refusing to delete the seeded `development` environment against a local endpoint (%q): "+
-				"these acceptance tests are destructive and must target an ephemeral production account "+
-				"(ADR-052 §2.8), not the local dev platform. Set SMPLKIT_ACC_DESTRUCTIVE=1 only if this is a "+
-				"throwaway local account.",
-			os.Getenv("SMPLKIT_API_URL"),
-		)
-	}
+	// Defense-in-depth at the actual destructive operation: never delete
+	// `development` without the explicit SMPLKIT_ACC_DESTRUCTIVE=1 opt-in.
+	// testAccPreCheck already enforces this for every test, but guarding the
+	// delete itself keeps it safe even if a future test reaches here by another
+	// path.
+	requireAccDestructive(t)
 	cfg := smplkit.Config{APIKey: apiKey}
 	// Route this side-channel client at the same backend the provider
 	// under test targets. SMPLKIT_API_URL may point at the local platform

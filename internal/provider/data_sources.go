@@ -509,7 +509,7 @@ func (d *jobDataSource) Schema(_ context.Context, _ datasource.SchemaRequest, re
 			"type":               dsschema.StringAttribute{Computed: true, Description: "Job type (currently always `http`)."},
 			"schedule":           dsschema.StringAttribute{Computed: true, Description: "Cron expression, ISO-8601 datetime, or `now`."},
 			"timezone":           dsschema.StringAttribute{Computed: true, Description: "IANA timezone the cron `schedule` is evaluated in (recurring jobs only), or null when the job inherits UTC."},
-			"retry_policy":       dsschema.StringAttribute{Computed: true, Description: "Base retry-policy id for failed runs, or null when the job inherits the built-in `Default` policy."},
+			"retry_policy":       dsschema.StringAttribute{Computed: true, Description: "Base retry-policy id for failed runs, or null when the job references no policy and is never retried."},
 			"concurrency_policy": dsschema.StringAttribute{Computed: true, Description: "How overlapping runs are handled (currently always `ALLOW`)."},
 			"environments": dsschema.MapNestedAttribute{
 				Computed: true,

@@ -148,9 +148,9 @@ func (r *jobResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *
 			},
 			"retry_policy": schema.StringAttribute{
 				Optional: true,
-				Description: "Base retry policy for failed runs — the `id` of a `smplkit_retry_policy` " +
-					"(or the built-in `Default`, which never retries), overridable per environment via the " +
-					"`environments` map. Omit it to inherit the built-in `Default` policy.",
+				Description: "Base retry policy for failed runs — the `id` of a `smplkit_retry_policy`, " +
+					"overridable per environment via the `environments` map. Omit it to reference no " +
+					"policy, in which case failed runs are never retried.",
 			},
 			"concurrency_policy": schema.StringAttribute{
 				Optional: true,
@@ -195,7 +195,7 @@ func (r *jobResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *
 						"retry_policy": schema.StringAttribute{
 							Optional: true,
 							Description: "Optional per-environment retry-policy override — the `id` of a " +
-								"`smplkit_retry_policy` (or `Default`) applied to runs in just this " +
+								"`smplkit_retry_policy` applied to runs in just this " +
 								"environment. Omit to inherit the job's base `retry_policy`.",
 						},
 						"configuration": jobConfigurationSchemaAttribute(false,

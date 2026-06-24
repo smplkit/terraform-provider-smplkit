@@ -41,7 +41,7 @@ output "production_next_run_at" {
 - `environments` (Attributes Map) Per-environment overrides keyed by environment id. The job runs in an environment only when that environment's entry is `enabled`. (see [below for nested schema](#nestedatt--environments))
 - `kind` (String) How the job runs, derived from its base `schedule`: `recurring` (cron), `manual` (no schedule, runs only when triggered), or `one_off` (a datetime / `now` schedule).
 - `name` (String) Display name.
-- `retry_policy` (String) Base retry-policy id for failed runs, or null when the job inherits the built-in `Default` policy.
+- `retry_policy` (String) Base retry-policy id for failed runs, or null when the job references no policy and is never retried.
 - `schedule` (String) Cron expression, ISO-8601 datetime, or `now`.
 - `timezone` (String) IANA timezone the cron `schedule` is evaluated in (recurring jobs only), or null when the job inherits UTC.
 - `type` (String) Job type (currently always `http`).

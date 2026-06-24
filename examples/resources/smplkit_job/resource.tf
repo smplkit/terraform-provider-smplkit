@@ -26,9 +26,8 @@ resource "smplkit_job" "nightly_cache_warm" {
   # for UTC.
   timezone = "America/New_York"
 
-  # Base retry policy for failed runs — the id of a smplkit_retry_policy
-  # (or the built-in "Default", which never retries). Overridable per
-  # environment via the environments map.
+  # Base retry policy for failed runs — the id of a smplkit_retry_policy,
+  # overridable per environment via the environments map.
   retry_policy = smplkit_retry_policy.cache_warm_retry.id
 
   configuration = {

@@ -55,7 +55,7 @@ func (r *retryPolicyResource) Schema(_ context.Context, _ resource.SchemaRequest
 	resp.Schema = schema.Schema{
 		Description: "A named, reusable retry policy for failed job runs. Reference it from a " +
 			"`smplkit_job`'s `retry_policy` (and optionally override it per environment). A job that " +
-			"references no policy uses the built-in `Default` policy, which never retries. Retry policies " +
+			"references no policy is never retried. Retry policies " +
 			"are account-global — never environment-scoped. The `id` is caller-supplied, immutable, and " +
 			"doubles as the import id. Updates are full-replace.",
 		Attributes: map[string]schema.Attribute{

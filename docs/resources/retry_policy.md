@@ -3,12 +3,12 @@
 page_title: "smplkit_retry_policy Resource - smplkit"
 subcategory: ""
 description: |-
-  A named, reusable retry policy for failed job runs. Reference it from a smplkit_job's retry_policy (and optionally override it per environment). A job that references no policy uses the built-in Default policy, which never retries. Retry policies are account-global — never environment-scoped. The id is caller-supplied, immutable, and doubles as the import id. Updates are full-replace.
+  A named, reusable retry policy for failed job runs. Reference it from a smplkit_job's retry_policy (and optionally override it per environment). A job that references no policy is never retried. Retry policies are account-global — never environment-scoped. The id is caller-supplied, immutable, and doubles as the import id. Updates are full-replace.
 ---
 
 # smplkit_retry_policy (Resource)
 
-A named, reusable retry policy for failed job runs. Reference it from a `smplkit_job`'s `retry_policy` (and optionally override it per environment). A job that references no policy uses the built-in `Default` policy, which never retries. Retry policies are account-global — never environment-scoped. The `id` is caller-supplied, immutable, and doubles as the import id. Updates are full-replace.
+A named, reusable retry policy for failed job runs. Reference it from a `smplkit_job`'s `retry_policy` (and optionally override it per environment). A job that references no policy is never retried. Retry policies are account-global — never environment-scoped. The `id` is caller-supplied, immutable, and doubles as the import id. Updates are full-replace.
 
 ## Example Usage
 

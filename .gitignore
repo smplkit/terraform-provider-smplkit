@@ -20,6 +20,9 @@ coverage.out
 .claude/
 *.swp
 
+# macOS noise
+.DS_Store
+
 # Goreleaser output
 dist/
 

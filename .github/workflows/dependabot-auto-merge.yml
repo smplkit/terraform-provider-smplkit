@@ -1,0 +1,60 @@
+name: dependabot-auto-merge
+
+# Auto-merges Dependabot PRs that bump github.com/smplkit/go-sdk/v3 by a
+# patch or minor version, so a go-sdk release reaches a provider release
+# within ~24h with no human in the loop (see .github/dependabot.yml,
+# which documents this workflow as the auto-merge half of the pipeline).
+#
+# Scope is deliberately narrow: only go-sdk patch/minor bumps qualify.
+# Other gomod bumps, github-actions bumps, and all majors land as PRs
+# for review. CI is the gate: if build/vet/lint/test or the tfplugindocs
+# sync check fail on the bumped dependency, the PR sits open until a
+# human investigates. Same model as smplkit/app's auto-merge workflow.
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  auto-merge:
+    name: auto-merge go-sdk patch/minor bumps
+    runs-on: ubuntu-latest
+    if: github.event.pull_request.user.login == 'dependabot[bot]'
+    steps:
+      - name: fetch Dependabot metadata
+        id: meta
+        uses: dependabot/fetch-metadata@v3
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: approve go-sdk patch/minor bumps
+        if: >-
+          contains(steps.meta.outputs.dependency-names, 'github.com/smplkit/go-sdk') &&
+          contains(fromJSON('["version-update:semver-patch","version-update:semver-minor"]'), steps.meta.outputs.update-type)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: |
+          # Org ruleset requires 1 approving review on PRs to main.
+          # Approve here so the subsequent --auto merge can succeed
+          # once CI is green. Idempotent: re-runs swallow the
+          # "already approved" error.
+          gh pr review "$PR_URL" --approve 2>/dev/null || true
+
+      - name: enable auto-merge for go-sdk patch/minor bumps
+        if: >-
+          contains(steps.meta.outputs.dependency-names, 'github.com/smplkit/go-sdk') &&
+          contains(fromJSON('["version-update:semver-patch","version-update:semver-minor"]'), steps.meta.outputs.update-type)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: |
+          # --auto waits for required status checks before merging.
+          # Falls through to immediate merge if the repo doesn't have
+          # auto-merge enabled in Settings → General → Pull Requests.
+          gh pr merge "$PR_URL" --auto --squash ||
+            gh pr merge "$PR_URL" --squash

@@ -12,7 +12,7 @@ environments, and services — through the smplkit management API.
 
 The provider is a thin wrapper over the public [Go SDK](https://github.com/smplkit/go-sdk)'s
 **management client**. It performs CRUD against the documented public API; it does
-not auto-register services, emit metrics, open WebSockets, or carry any of
+not auto-register services, emit metrics, open a live-update stream, or carry any of
 the discovery side-effects the runtime SDK clients have.
 
 ## Authentication
